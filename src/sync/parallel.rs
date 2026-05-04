@@ -21,9 +21,9 @@ pub struct SyncOptions {
 /// Outcome of a parallel sync run.
 pub struct SyncResult {
     /// Project paths that synced successfully.
-    pub success: Vec<String>,
+    pub success: Vec<PathBuf>,
     /// `(project_path, error_message)` for each failure.
-    pub failure: Vec<(String, String)>,
+    pub failure: Vec<(PathBuf, String)>,
 }
 
 impl Default for SyncOptions {
@@ -40,8 +40,9 @@ impl Default for SyncOptions {
 
 /// Strip trailing `/` so that path comparisons work uniformly regardless of
 /// whether the manifest author included a trailing separator.
-fn normalize_path(s: &str) -> &str {
-    s.trim_end_matches('/')
+fn normalize_path(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    PathBuf::from(s.trim_end_matches('/'))
 }
 
 /// Sync every project listed in `manifest` under `work_dir`.
@@ -75,23 +76,25 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
     // ---- Parent-child dependency tracking ----
     // Collect all *normalized* project paths (trailing `/` stripped) to
     // detect nesting correctly.
-    let norm_paths: HashSet<String> = manifest
+    let norm_paths: HashSet<PathBuf> = manifest
         .projects
         .iter()
-        .map(|p| normalize_path(p.path.as_str()).to_owned())
+        .map(|p| normalize_path(&p.path))
         .collect();
 
     // For each project, find its closest ancestor that is also a project.
-    let mut parent_of: HashMap<String, String> = HashMap::new();
+    let mut parent_of: HashMap<PathBuf, PathBuf> = HashMap::new();
     for path in &norm_paths {
-        let mut best: Option<&str> = None;
+        let mut best: Option<&Path> = None;
+        let path_str = path.to_string_lossy();
         for candidate in &norm_paths {
+            let cand_str = candidate.to_string_lossy();
             if candidate != path
-                && path.starts_with(candidate.as_str())
-                && path.as_bytes().get(candidate.len()) == Some(&b'/')
-                && best.is_none_or(|b| candidate.len() > b.len())
+                && path_str.starts_with(cand_str.as_ref())
+                && path_str.as_bytes().get(cand_str.len()) == Some(&b'/')
+                && best.is_none_or(|b| candidate.as_os_str().len() > b.as_os_str().len())
             {
-                best = Some(candidate.as_str());
+                best = Some(candidate.as_path());
             }
         }
         if let Some(p) = best {
@@ -102,13 +105,13 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
     // Create completion signals for projects that have children.
     // The channel carries `Option<bool>`: `None` = not done, `Some(true)`
     // = parent succeeded, `Some(false)` = parent failed.
-    let parent_paths: HashSet<&str> = parent_of.values().map(String::as_str).collect();
-    let mut done_txs: HashMap<String, watch::Sender<Option<bool>>> = HashMap::new();
-    let mut done_rxs: HashMap<String, watch::Receiver<Option<bool>>> = HashMap::new();
+    let parent_paths: HashSet<&PathBuf> = parent_of.values().collect();
+    let mut done_txs: HashMap<PathBuf, watch::Sender<Option<bool>>> = HashMap::new();
+    let mut done_rxs: HashMap<PathBuf, watch::Receiver<Option<bool>>> = HashMap::new();
     for path in &parent_paths {
         let (tx, rx) = watch::channel(None);
-        done_txs.insert((*path).to_string(), tx);
-        done_rxs.insert((*path).to_string(), rx);
+        done_txs.insert((*path).clone(), tx);
+        done_rxs.insert((*path).clone(), rx);
     }
 
     // ---- Spawn tasks ----
@@ -126,7 +129,7 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
 
         let target_path: PathBuf = work_dir.join(&project.path);
         let project_path = project.path.clone();
-        let norm = normalize_path(project.path.as_str()).to_owned();
+        let norm = normalize_path(&project.path);
         let depth = opts.depth;
         let current_branch = opts.current_branch;
         let sem = Arc::clone(&semaphore);
@@ -134,10 +137,10 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
         // If this project has a parent project, grab a receiver to wait on.
         let wait_rx = parent_of
             .get(&norm)
-            .and_then(|pp| done_rxs.get(pp.as_str()).cloned());
+            .and_then(|pp| done_rxs.get(pp).cloned());
 
         // If this project is a parent, grab the sender to signal completion.
-        let done_tx = done_txs.remove(norm.as_str());
+        let done_tx = done_txs.remove(&norm);
 
         handles.push(tokio::spawn(async move {
             // Wait for parent project to finish before starting.
@@ -180,7 +183,7 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
         match handle.await {
             Ok((path, Ok(()))) => success.push(path),
             Ok((path, Err(e))) => failure.push((path, format!("{e:#}"))),
-            Err(e) => failure.push(("unknown".into(), format!("task panicked: {e}"))),
+            Err(e) => failure.push((PathBuf::from("unknown"), format!("task panicked: {e}"))),
         }
     }
 

@@ -75,7 +75,7 @@ fn apply_file_links(
             let src = project_dir.join(&lf.src);
             let dest = work_dir.join(&lf.dest);
             if let Err(e) = create_symlink(&src, &dest) {
-                eprintln!("linkfile {}: {e}", lf.dest);
+                eprintln!("linkfile {}: {e}", lf.dest.display());
             }
         }
 
@@ -83,7 +83,7 @@ fn apply_file_links(
             let src = project_dir.join(&cf.src);
             let dest = work_dir.join(&cf.dest);
             if let Err(e) = copy_file(&src, &dest) {
-                eprintln!("copyfile {}: {e}", cf.dest);
+                eprintln!("copyfile {}: {e}", cf.dest.display());
             }
         }
     }
@@ -159,10 +159,10 @@ fn copy_file(src: &Path, dest: &Path) -> Result<()> {
 
 fn print_result(result: &SyncResult) {
     for path in &result.success {
-        println!("✓ {path}");
+        println!("✓ {}", path.display());
     }
     for (path, err) in &result.failure {
-        println!("✗ {path}: {err}");
+        println!("✗ {}: {err}", path.display());
     }
 
     let total = result.success.len() + result.failure.len();

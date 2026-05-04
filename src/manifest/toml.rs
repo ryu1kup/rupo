@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::xml;
@@ -27,7 +29,7 @@ pub struct RemoteEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectEntry {
-    pub path: String,
+    pub path: PathBuf,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
@@ -44,15 +46,15 @@ pub struct ProjectEntry {
 /// A file copy rule: copy `src` (relative to project) to `dest` (relative to workspace root).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileCopy {
-    pub src: String,
-    pub dest: String,
+    pub src: PathBuf,
+    pub dest: PathBuf,
 }
 
 /// A symlink rule: create symlink at `dest` pointing to `src` (relative to project).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileLink {
-    pub src: String,
-    pub dest: String,
+    pub src: PathBuf,
+    pub dest: PathBuf,
 }
 
 impl Manifest {
@@ -86,18 +88,18 @@ impl Manifest {
             .projects
             .iter()
             .map(|p| ProjectEntry {
-                path: p.path.to_string_lossy().into_owned(),
+                path: p.path.clone(),
                 name: p.name.clone(),
                 revision: p.revision.clone(),
                 remote: p.remote.clone(),
                 groups: p.groups.clone(),
                 copyfiles: p.copyfiles.iter().map(|c| FileCopy {
-                    src: c.src.clone(),
-                    dest: c.dest.clone(),
+                    src: PathBuf::from(&c.src),
+                    dest: PathBuf::from(&c.dest),
                 }).collect(),
                 linkfiles: p.linkfiles.iter().map(|l| FileLink {
-                    src: l.src.clone(),
-                    dest: l.dest.clone(),
+                    src: PathBuf::from(&l.src),
+                    dest: PathBuf::from(&l.dest),
                 }).collect(),
             })
             .collect();

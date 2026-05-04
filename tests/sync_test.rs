@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tempfile::TempDir;
@@ -92,7 +92,7 @@ async fn sync_result_reports_all_projects() {
         }],
         projects: vec![
             ProjectEntry {
-                path: "app/core".to_string(),
+                path: PathBuf::from("app/core"),
                 name: "core.git".to_string(),
                 revision: Some("main".to_string()),
                 remote: None,
@@ -101,7 +101,7 @@ async fn sync_result_reports_all_projects() {
                 linkfiles: vec![],
             },
             ProjectEntry {
-                path: "app/broken".to_string(),
+                path: PathBuf::from("app/broken"),
                 name: "nonexistent-repo.git".to_string(),
                 revision: None,
                 remote: None,
@@ -125,15 +125,15 @@ async fn sync_result_reports_all_projects() {
 
     // "core" should succeed
     assert!(
-        result.success.contains(&"app/core".to_string()),
+        result.success.contains(&PathBuf::from("app/core")),
         "expected app/core in success, got: {:?}",
         result.success
     );
 
     // "broken" should fail
-    let failed_paths: Vec<&str> = result.failure.iter().map(|(p, _)| p.as_str()).collect();
+    let failed_paths: Vec<&Path> = result.failure.iter().map(|(p, _)| p.as_path()).collect();
     assert!(
-        failed_paths.contains(&"app/broken"),
+        failed_paths.contains(&Path::new("app/broken")),
         "expected app/broken in failure, got: {:?}",
         result.failure
     );
