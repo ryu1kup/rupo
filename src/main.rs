@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use rupo::sync::parallel::SyncOptions;
 
 #[derive(Parser)]
 #[command(
@@ -26,6 +27,21 @@ enum Commands {
         #[arg(short, long, default_value = "default.xml")]
         manifest: String,
     },
+
+    /// Sync all projects in the workspace
+    Sync {
+        /// Number of parallel jobs (default: number of CPU cores)
+        #[arg(short, long)]
+        jobs: Option<usize>,
+
+        /// Only sync the current branch
+        #[arg(short, long)]
+        current_branch: bool,
+
+        /// Shallow clone depth
+        #[arg(long)]
+        depth: Option<u32>,
+    },
 }
 
 #[tokio::main]
@@ -40,6 +56,23 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let work_dir = std::env::current_dir()?;
             rupo::cli::init::run(&url, branch.as_deref(), &manifest, &work_dir).await?;
+        }
+        Commands::Sync {
+            jobs,
+            current_branch,
+            depth,
+        } => {
+            let work_dir = std::env::current_dir()?;
+            let opts = SyncOptions {
+                jobs: jobs.unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(4)
+                }),
+                current_branch,
+                depth,
+            };
+            rupo::cli::sync::run(&work_dir, opts).await?;
         }
     }
 

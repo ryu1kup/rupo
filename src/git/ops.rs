@@ -160,6 +160,79 @@ fn reset_to_remote_blocking(repo_path: &Path, branch: Option<&str>) -> Result<()
     Ok(())
 }
 
+/// Initialise a non-empty directory as a git repo, then fetch and checkout.
+///
+/// This handles the case where a project's directory already exists (e.g.
+/// because child projects were cloned into sub-directories during a previous
+/// partial sync) but does not yet contain a `.git` directory.
+pub async fn init_and_fetch(url: &str, target_path: &Path, opts: &CloneOptions) -> Result<()> {
+    let url = url.to_owned();
+    let target_path = target_path.to_path_buf();
+    let opts = opts.clone();
+
+    tokio::task::spawn_blocking(move || {
+        init_and_fetch_blocking(&url, &target_path, opts.branch.as_deref(), opts.depth)
+    })
+    .await
+    .context("init_and_fetch task panicked")?
+}
+
+fn init_and_fetch_blocking(
+    url: &str,
+    target: &Path,
+    branch: Option<&str>,
+    depth: Option<u32>,
+) -> Result<()> {
+    run_git(target, &["init"])?;
+
+    // Add remote, or update URL if it already exists.
+    if run_git(target, &["remote", "add", "origin", url]).is_err() {
+        run_git(target, &["remote", "set-url", "origin", url])?;
+    }
+
+    // Fetch.
+    let depth_flag;
+    let mut args = vec!["fetch"];
+    if let Some(d) = depth {
+        depth_flag = format!("--depth={d}");
+        args.push(&depth_flag);
+    }
+    args.push("origin");
+    if let Some(b) = branch {
+        args.push(b);
+    }
+    run_git(target, &args)?;
+
+    // Checkout: create/reset a local branch tracking the remote.
+    if let Some(b) = branch {
+        let remote_ref = format!("origin/{b}");
+        run_git(target, &["checkout", "-B", b, &remote_ref])?;
+    } else {
+        run_git(target, &["checkout", "FETCH_HEAD"])?;
+    }
+
+    Ok(())
+}
+
+/// Run a `git` sub-command in `dir` and return an error on non-zero exit.
+fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .with_context(|| format!("failed to run git {}", args.first().unwrap_or(&"")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "git {} failed: {}",
+            args.first().unwrap_or(&""),
+            stderr.trim()
+        );
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
