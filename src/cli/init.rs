@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use tokio::fs;
 
+use crate::config::Config;
 use crate::git::ops::{self, CloneOptions, FetchOptions};
 use crate::manifest;
 
@@ -12,16 +13,18 @@ use crate::manifest;
 /// 1. Clone manifest repo into `.rupo/manifests/`
 /// 2. Read `<manifest>` from the cloned repo
 /// 3. Parse manifest XML → convert to `rupo.toml` → save
+/// 4. Save `config.toml` with init parameters
 ///
 /// ## Reinit (`.rupo/` already exists)
 /// 1. Fetch and update `.rupo/manifests/`
 /// 2. Re-read `<manifest>` from the updated repo
 /// 3. Parse manifest XML → overwrite `rupo.toml`
+/// 4. Overwrite `config.toml` with current parameters
 pub async fn run(url: &str, branch: Option<&str>, manifest: &str, work_dir: &Path) -> Result<()> {
     let workspace = work_dir.join(".rupo");
 
     if workspace.exists() {
-        reinitialize(&workspace, branch, manifest).await?;
+        reinitialize(&workspace, url, branch, manifest).await?;
         println!("Reinitialized rupo workspace in {}", workspace.display());
     } else {
         fs::create_dir_all(&workspace)
@@ -59,11 +62,17 @@ async fn initialize(
         .await
         .context("failed to clone manifest repository")?;
 
-    parse_and_save(workspace, manifest, branch).await
+    parse_and_save(workspace, manifest, branch).await?;
+    save_config(workspace, url, branch, manifest)
 }
 
 /// Fetch updates from remote and regenerate rupo.toml (reinit).
-async fn reinitialize(workspace: &Path, branch: Option<&str>, manifest: &str) -> Result<()> {
+async fn reinitialize(
+    workspace: &Path,
+    url: &str,
+    branch: Option<&str>,
+    manifest: &str,
+) -> Result<()> {
     let manifests_dir = workspace.join("manifests");
     let fetch_opts = FetchOptions {
         branch: branch.map(String::from),
@@ -77,7 +86,8 @@ async fn reinitialize(workspace: &Path, branch: Option<&str>, manifest: &str) ->
         .await
         .context("failed to update manifest working tree")?;
 
-    parse_and_save(workspace, manifest, branch).await
+    parse_and_save(workspace, manifest, branch).await?;
+    save_config(workspace, url, branch, manifest)
 }
 
 /// Read manifest XML, parse it, convert to rupo.toml, and save.
@@ -97,4 +107,15 @@ async fn parse_and_save(workspace: &Path, manifest: &str, branch: Option<&str>) 
         .context("failed to write rupo.toml")?;
 
     Ok(())
+}
+
+/// Persist init parameters to config.toml.
+fn save_config(workspace: &Path, url: &str, branch: Option<&str>, manifest: &str) -> Result<()> {
+    let config = Config {
+        url: url.to_string(),
+        branch: branch.map(String::from),
+        manifest: manifest.to_string(),
+        mirror: false,
+    };
+    config.save(workspace).context("failed to save config.toml")
 }
