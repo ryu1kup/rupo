@@ -26,6 +26,10 @@ enum Commands {
         /// Manifest filename within the repository
         #[arg(short, long, default_value = "default.xml")]
         manifest: String,
+
+        /// Restrict manifest projects to specified group(s) [default|all|G1,G2,-G3]
+        #[arg(short, long)]
+        groups: Option<String>,
     },
 
     /// Sync all projects in the workspace
@@ -41,6 +45,10 @@ enum Commands {
         /// Shallow clone depth
         #[arg(long)]
         depth: Option<u32>,
+
+        /// Override group filter for this sync only [default|all|G1,G2,-G3]
+        #[arg(short, long)]
+        groups: Option<String>,
     },
 }
 
@@ -53,14 +61,17 @@ async fn main() -> anyhow::Result<()> {
             url,
             branch,
             manifest,
+            groups,
         } => {
             let work_dir = std::env::current_dir()?;
-            rupo::cli::init::run(&url, branch.as_deref(), &manifest, &work_dir).await?;
+            rupo::cli::init::run(&url, branch.as_deref(), &manifest, groups.as_deref(), &work_dir)
+                .await?;
         }
         Commands::Sync {
             jobs,
             current_branch,
             depth,
+            groups,
         } => {
             let work_dir = std::env::current_dir()?;
             let opts = SyncOptions {
@@ -72,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
                 current_branch,
                 depth,
             };
-            rupo::cli::sync::run(&work_dir, opts).await?;
+            rupo::cli::sync::run(&work_dir, opts, groups.as_deref()).await?;
         }
     }
 

@@ -33,6 +33,7 @@ pub struct Project {
     pub path: PathBuf,
     pub revision: Option<String>,
     pub remote: Option<String>,
+    pub groups: Vec<String>,
 }
 
 fn attr_value(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
@@ -80,11 +81,21 @@ pub fn parse(content: &str) -> Result<Manifest> {
                 b"project" => {
                     let name = require_attr(e, b"name", "project")?;
                     let path_str = attr_value(e, b"path").unwrap_or_else(|| name.clone());
+                    let groups = attr_value(e, b"groups")
+                        .map(|g| {
+                            g.split([',', ' '])
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .map(String::from)
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     projects.push(Project {
                         name,
                         path: PathBuf::from(path_str),
                         revision: attr_value(e, b"revision"),
                         remote: attr_value(e, b"remote"),
+                        groups,
                     });
                 }
                 _ => {}
@@ -112,7 +123,7 @@ mod tests {
   <remote name="backup" fetch="https://backup.example.com" />
   <default revision="main" remote="origin" />
   <project path="app/core" name="core" />
-  <project path="app/ui" name="ui" revision="dev" remote="backup" />
+  <project path="app/ui" name="ui" revision="dev" remote="backup" groups="vendor,optional" />
   <project path="lib/util" name="util" />
 </manifest>
 "#;
@@ -145,11 +156,13 @@ mod tests {
         assert_eq!(m.projects[0].name, "core");
         assert_eq!(m.projects[0].path, PathBuf::from("app/core"));
         assert_eq!(m.projects[0].revision, None);
+        assert!(m.projects[0].groups.is_empty());
 
         assert_eq!(m.projects[1].name, "ui");
         assert_eq!(m.projects[1].path, PathBuf::from("app/ui"));
         assert_eq!(m.projects[1].revision.as_deref(), Some("dev"));
         assert_eq!(m.projects[1].remote.as_deref(), Some("backup"));
+        assert_eq!(m.projects[1].groups, vec!["vendor", "optional"]);
     }
 
     #[test]

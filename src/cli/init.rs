@@ -20,11 +20,18 @@ use crate::manifest;
 /// 2. Re-read `<manifest>` from the updated repo
 /// 3. Parse manifest XML → overwrite `rupo.toml`
 /// 4. Overwrite `config.toml` with current parameters
-pub async fn run(url: &str, branch: Option<&str>, manifest: &str, work_dir: &Path) -> Result<()> {
+pub async fn run(
+    url: &str,
+    branch: Option<&str>,
+    manifest: &str,
+    groups: Option<&str>,
+    work_dir: &Path,
+) -> Result<()> {
     let workspace = work_dir.join(".rupo");
 
     if workspace.exists() {
         reinitialize(&workspace, url, branch, manifest).await?;
+        save_config(&workspace, url, branch, manifest, groups)?;
         println!("Reinitialized rupo workspace in {}", workspace.display());
     } else {
         fs::create_dir_all(&workspace)
@@ -33,6 +40,7 @@ pub async fn run(url: &str, branch: Option<&str>, manifest: &str, work_dir: &Pat
 
         match initialize(&workspace, url, branch, manifest).await {
             Ok(()) => {
+                save_config(&workspace, url, branch, manifest, groups)?;
                 println!("Initialized rupo workspace in {}", workspace.display());
             }
             Err(e) => {
@@ -62,14 +70,13 @@ async fn initialize(
         .await
         .context("failed to clone manifest repository")?;
 
-    parse_and_save(workspace, manifest, branch).await?;
-    save_config(workspace, url, branch, manifest)
+    parse_and_save(workspace, manifest, branch).await
 }
 
 /// Fetch updates from remote and regenerate rupo.toml (reinit).
 async fn reinitialize(
     workspace: &Path,
-    url: &str,
+    _url: &str,
     branch: Option<&str>,
     manifest: &str,
 ) -> Result<()> {
@@ -86,8 +93,7 @@ async fn reinitialize(
         .await
         .context("failed to update manifest working tree")?;
 
-    parse_and_save(workspace, manifest, branch).await?;
-    save_config(workspace, url, branch, manifest)
+    parse_and_save(workspace, manifest, branch).await
 }
 
 /// Read manifest XML, parse it, convert to rupo.toml, and save.
@@ -110,12 +116,19 @@ async fn parse_and_save(workspace: &Path, manifest: &str, branch: Option<&str>) 
 }
 
 /// Persist init parameters to config.toml.
-fn save_config(workspace: &Path, url: &str, branch: Option<&str>, manifest: &str) -> Result<()> {
+fn save_config(
+    workspace: &Path,
+    url: &str,
+    branch: Option<&str>,
+    manifest: &str,
+    groups: Option<&str>,
+) -> Result<()> {
     let config = Config {
         url: url.to_string(),
         branch: branch.map(String::from),
         manifest: manifest.to_string(),
         mirror: false,
+        groups: groups.map(String::from),
     };
     config.save(workspace).context("failed to save config.toml")
 }

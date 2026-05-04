@@ -11,6 +11,8 @@ pub struct Config {
     pub branch: Option<String>,
     pub manifest: String,
     pub mirror: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<String>,
 }
 
 impl Config {
@@ -38,6 +40,7 @@ impl Default for Config {
             branch: None,
             manifest: "default.xml".to_string(),
             mirror: false,
+            groups: None,
         }
     }
 }
@@ -55,6 +58,7 @@ mod tests {
             branch: Some("main".to_string()),
             manifest: "custom.xml".to_string(),
             mirror: true,
+            groups: Some("default,-vendor".to_string()),
         };
 
         config.save(tmp.path()).unwrap();
@@ -64,6 +68,7 @@ mod tests {
         assert_eq!(loaded.branch.as_deref(), Some("main"));
         assert_eq!(loaded.manifest, "custom.xml");
         assert!(loaded.mirror);
+        assert_eq!(loaded.groups.as_deref(), Some("default,-vendor"));
     }
 
     #[test]
@@ -74,6 +79,7 @@ mod tests {
             branch: None,
             manifest: "default.xml".to_string(),
             mirror: false,
+            groups: None,
         };
 
         config.save(tmp.path()).unwrap();
@@ -83,6 +89,7 @@ mod tests {
         assert!(loaded.branch.is_none());
         assert_eq!(loaded.manifest, "default.xml");
         assert!(!loaded.mirror);
+        assert!(loaded.groups.is_none());
     }
 
     #[test]

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::manifest::xml;
 
 /// Native rupo manifest in TOML format.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub defaults: Option<Defaults>,
@@ -11,7 +11,7 @@ pub struct Manifest {
     pub projects: Vec<ProjectEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Defaults {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
@@ -19,13 +19,13 @@ pub struct Defaults {
     pub remote: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteEntry {
     pub name: String,
     pub fetch: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectEntry {
     pub path: String,
     pub name: String,
@@ -33,6 +33,8 @@ pub struct ProjectEntry {
     pub revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
 }
 
 impl Manifest {
@@ -70,6 +72,7 @@ impl Manifest {
                 name: p.name.clone(),
                 revision: p.revision.clone(),
                 remote: p.remote.clone(),
+                groups: p.groups.clone(),
             })
             .collect();
 

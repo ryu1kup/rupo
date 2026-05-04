@@ -105,7 +105,7 @@ async fn init_with_valid_manifest_creates_workspace() {
     let work_dir = tmp.path().join("project");
     std::fs::create_dir(&work_dir).unwrap();
 
-    rupo::cli::init::run(&url, Some("main"), "default.xml", work_dir.as_path())
+    rupo::cli::init::run(&url, Some("main"), "default.xml", None, work_dir.as_path())
         .await
         .unwrap();
 
@@ -118,6 +118,13 @@ async fn init_with_valid_manifest_creates_workspace() {
     assert!(toml_content.contains(r#"name = "origin""#));
     assert!(toml_content.contains(r#"name = "core""#));
     assert!(toml_content.contains(r#"revision = "main""#));
+
+    // Verify config includes default groups
+    let config_content = std::fs::read_to_string(workspace.join("config.toml")).unwrap();
+    assert!(
+        !config_content.contains("groups"),
+        "groups should not appear when None"
+    );
 }
 
 #[tokio::test]
@@ -127,7 +134,7 @@ async fn init_with_branch_override_sets_revision_in_toml() {
     let work_dir = tmp.path().join("project");
     std::fs::create_dir(&work_dir).unwrap();
 
-    rupo::cli::init::run(&url, Some("main"), "default.xml", work_dir.as_path())
+    rupo::cli::init::run(&url, Some("main"), "default.xml", None, work_dir.as_path())
         .await
         .unwrap();
 
@@ -149,6 +156,7 @@ async fn init_with_corrupted_workspace_returns_error() {
         "/nonexistent",
         None::<&str>,
         "default.xml",
+        None,
         work_dir.as_path(),
     )
     .await;
@@ -171,6 +179,7 @@ async fn init_with_invalid_url_returns_error() {
         "://bad-url",
         None::<&str>,
         "default.xml",
+        None,
         work_dir.as_path(),
     )
     .await;
@@ -187,7 +196,7 @@ async fn init_preserves_project_paths_in_toml() {
     let work_dir = tmp.path().join("project");
     std::fs::create_dir(&work_dir).unwrap();
 
-    rupo::cli::init::run(&url, Some("main"), "default.xml", work_dir.as_path())
+    rupo::cli::init::run(&url, Some("main"), "default.xml", None, work_dir.as_path())
         .await
         .unwrap();
 
@@ -204,7 +213,7 @@ async fn reinit_with_existing_workspace_fetches_and_updates_toml() {
     std::fs::create_dir(&work_dir).unwrap();
 
     // First init
-    rupo::cli::init::run(&url, Some("main"), "default.xml", work_dir.as_path())
+    rupo::cli::init::run(&url, Some("main"), "default.xml", None, work_dir.as_path())
         .await
         .unwrap();
 
@@ -218,7 +227,7 @@ async fn reinit_with_existing_workspace_fetches_and_updates_toml() {
     update_manifest_in_repo(tmp.path(), UPDATED_MANIFEST);
 
     // Reinit
-    rupo::cli::init::run(&url, Some("main"), "default.xml", work_dir.as_path())
+    rupo::cli::init::run(&url, Some("main"), "default.xml", None, work_dir.as_path())
         .await
         .unwrap();
 

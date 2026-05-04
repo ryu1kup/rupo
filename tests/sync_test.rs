@@ -96,12 +96,14 @@ async fn sync_result_reports_all_projects() {
                 name: "core.git".to_string(),
                 revision: Some("main".to_string()),
                 remote: None,
+                groups: vec![],
             },
             ProjectEntry {
                 path: "app/broken".to_string(),
                 name: "nonexistent-repo.git".to_string(),
                 revision: None,
                 remote: None,
+                groups: vec![],
             },
         ],
     };
