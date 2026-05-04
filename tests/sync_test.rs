@@ -97,6 +97,8 @@ async fn sync_result_reports_all_projects() {
                 revision: Some("main".to_string()),
                 remote: None,
                 groups: vec![],
+                copyfiles: vec![],
+                linkfiles: vec![],
             },
             ProjectEntry {
                 path: "app/broken".to_string(),
@@ -104,6 +106,8 @@ async fn sync_result_reports_all_projects() {
                 revision: None,
                 remote: None,
                 groups: vec![],
+                copyfiles: vec![],
+                linkfiles: vec![],
             },
         ],
     };

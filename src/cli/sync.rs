@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -49,7 +49,111 @@ pub async fn run(work_dir: &Path, opts: SyncOptions, cli_groups: Option<&str>) -
 
     let result: SyncResult = parallel::run(work_dir, &manifest, &opts).await;
 
+    // Apply linkfiles and copyfiles for successfully synced projects
+    apply_file_links(work_dir, &manifest, &result);
+
     print_result(&result);
+    Ok(())
+}
+
+/// Create symlinks (linkfile) and copy files (copyfile) declared in the manifest.
+///
+/// Only applied for projects that synced successfully.
+fn apply_file_links(
+    work_dir: &Path,
+    manifest: &manifest_toml::Manifest,
+    result: &SyncResult,
+) {
+    for project in &manifest.projects {
+        if !result.success.contains(&project.path) {
+            continue;
+        }
+
+        let project_dir = work_dir.join(&project.path);
+
+        for lf in &project.linkfiles {
+            let src = project_dir.join(&lf.src);
+            let dest = work_dir.join(&lf.dest);
+            if let Err(e) = create_symlink(&src, &dest) {
+                eprintln!("linkfile {}: {e}", lf.dest);
+            }
+        }
+
+        for cf in &project.copyfiles {
+            let src = project_dir.join(&cf.src);
+            let dest = work_dir.join(&cf.dest);
+            if let Err(e) = copy_file(&src, &dest) {
+                eprintln!("copyfile {}: {e}", cf.dest);
+            }
+        }
+    }
+}
+
+/// Create a symlink at `dest` pointing to `src`.
+///
+/// The symlink target is stored as a relative path from the dest's parent directory.
+fn create_symlink(src: &Path, dest: &Path) -> Result<()> {
+    let dest_parent = dest.parent().context("dest has no parent")?;
+    let rel = relative_path(dest_parent, src);
+
+    // Remove existing dest (symlink or file) so we can recreate
+    if dest.exists() || dest.symlink_metadata().is_ok() {
+        std::fs::remove_file(dest)
+            .with_context(|| format!("failed to remove existing {}", dest.display()))?;
+    }
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&rel, dest)
+        .with_context(|| format!("symlink {} -> {}", dest.display(), rel.display()))?;
+
+    #[cfg(not(unix))]
+    std::fs::copy(src, dest)
+        .with_context(|| format!("copy {} -> {}", src.display(), dest.display()))?;
+
+    Ok(())
+}
+
+/// Compute a relative path from `base` to `target`.
+///
+/// Both paths should share a common ancestor (e.g. workspace root).
+fn relative_path(base: &Path, target: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let base_parts: Vec<_> = base.components().collect();
+    let target_parts: Vec<_> = target.components().collect();
+
+    // Find length of common prefix
+    let common = base_parts
+        .iter()
+        .zip(target_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let mut rel = PathBuf::new();
+    // Go up from base to common ancestor
+    for _ in &base_parts[common..] {
+        if matches!(base_parts[common], Component::Normal(_) | Component::CurDir) || common < base_parts.len() {
+            rel.push("..");
+        }
+    }
+    // Descend to target
+    for part in &target_parts[common..] {
+        rel.push(part);
+    }
+    rel
+}
+
+/// Copy a file from `src` to `dest`.
+fn copy_file(src: &Path, dest: &Path) -> Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(src, dest)
+        .with_context(|| format!("copy {} -> {}", src.display(), dest.display()))?;
     Ok(())
 }
 

@@ -35,6 +35,24 @@ pub struct ProjectEntry {
     pub remote: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copyfiles: Vec<FileCopy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linkfiles: Vec<FileLink>,
+}
+
+/// A file copy rule: copy `src` (relative to project) to `dest` (relative to workspace root).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileCopy {
+    pub src: String,
+    pub dest: String,
+}
+
+/// A symlink rule: create symlink at `dest` pointing to `src` (relative to project).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileLink {
+    pub src: String,
+    pub dest: String,
 }
 
 impl Manifest {
@@ -73,6 +91,14 @@ impl Manifest {
                 revision: p.revision.clone(),
                 remote: p.remote.clone(),
                 groups: p.groups.clone(),
+                copyfiles: p.copyfiles.iter().map(|c| FileCopy {
+                    src: c.src.clone(),
+                    dest: c.dest.clone(),
+                }).collect(),
+                linkfiles: p.linkfiles.iter().map(|l| FileLink {
+                    src: l.src.clone(),
+                    dest: l.dest.clone(),
+                }).collect(),
             })
             .collect();
 

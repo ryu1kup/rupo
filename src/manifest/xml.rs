@@ -34,6 +34,22 @@ pub struct Project {
     pub revision: Option<String>,
     pub remote: Option<String>,
     pub groups: Vec<String>,
+    pub copyfiles: Vec<CopyFile>,
+    pub linkfiles: Vec<LinkFile>,
+}
+
+/// A `<copyfile src="..." dest="..." />` child of `<project>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopyFile {
+    pub src: String,
+    pub dest: String,
+}
+
+/// A `<linkfile src="..." dest="..." />` child of `<project>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkFile {
+    pub src: String,
+    pub dest: String,
 }
 
 fn attr_value(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
@@ -64,9 +80,26 @@ pub fn parse(content: &str) -> Result<Manifest> {
     let mut default = None;
     let mut projects = Vec::new();
 
+    // State for tracking current project (when inside <project>...</project>)
+    let mut current_project: Option<Project> = None;
+
     loop {
         match reader.read_event() {
-            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) => match e.name().as_ref() {
+            Ok(Event::Start(ref e)) => match e.name().as_ref() {
+                b"project" => {
+                    let proj = parse_project_attrs(e)?;
+                    current_project = Some(proj);
+                }
+                b"copyfile" if current_project.is_some() => {
+                    let src = require_attr(e, b"src", "copyfile")?;
+                    let dest = require_attr(e, b"dest", "copyfile")?;
+                    current_project.as_mut().unwrap().copyfiles.push(CopyFile { src, dest });
+                }
+                b"linkfile" if current_project.is_some() => {
+                    let src = require_attr(e, b"src", "linkfile")?;
+                    let dest = require_attr(e, b"dest", "linkfile")?;
+                    current_project.as_mut().unwrap().linkfiles.push(LinkFile { src, dest });
+                }
                 b"remote" => {
                     let name = require_attr(e, b"name", "remote")?;
                     let fetch = require_attr(e, b"fetch", "remote")?;
@@ -78,28 +111,42 @@ pub fn parse(content: &str) -> Result<Manifest> {
                         remote: attr_value(e, b"remote"),
                     });
                 }
+                _ => {}
+            },
+            Ok(Event::Empty(ref e)) => match e.name().as_ref() {
                 b"project" => {
-                    let name = require_attr(e, b"name", "project")?;
-                    let path_str = attr_value(e, b"path").unwrap_or_else(|| name.clone());
-                    let groups = attr_value(e, b"groups")
-                        .map(|g| {
-                            g.split([',', ' '])
-                                .map(str::trim)
-                                .filter(|s| !s.is_empty())
-                                .map(String::from)
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    projects.push(Project {
-                        name,
-                        path: PathBuf::from(path_str),
+                    projects.push(parse_project_attrs(e)?);
+                }
+                b"copyfile" if current_project.is_some() => {
+                    let src = require_attr(e, b"src", "copyfile")?;
+                    let dest = require_attr(e, b"dest", "copyfile")?;
+                    current_project.as_mut().unwrap().copyfiles.push(CopyFile { src, dest });
+                }
+                b"linkfile" if current_project.is_some() => {
+                    let src = require_attr(e, b"src", "linkfile")?;
+                    let dest = require_attr(e, b"dest", "linkfile")?;
+                    current_project.as_mut().unwrap().linkfiles.push(LinkFile { src, dest });
+                }
+                b"remote" => {
+                    let name = require_attr(e, b"name", "remote")?;
+                    let fetch = require_attr(e, b"fetch", "remote")?;
+                    remotes.push(Remote { name, fetch });
+                }
+                b"default" => {
+                    default = Some(Default {
                         revision: attr_value(e, b"revision"),
                         remote: attr_value(e, b"remote"),
-                        groups,
                     });
                 }
                 _ => {}
             },
+            Ok(Event::End(ref e)) => {
+                if e.name().as_ref() == b"project"
+                    && let Some(proj) = current_project.take()
+                {
+                    projects.push(proj);
+                }
+            }
             Ok(Event::Eof) => break,
             Err(e) => bail!("invalid XML at position {}: {e}", reader.error_position()),
             _ => {}
@@ -110,6 +157,30 @@ pub fn parse(content: &str) -> Result<Manifest> {
         remotes,
         default,
         projects,
+    })
+}
+
+/// Extract project attributes from a `<project ...>` element.
+fn parse_project_attrs(e: &quick_xml::events::BytesStart<'_>) -> Result<Project> {
+    let name = require_attr(e, b"name", "project")?;
+    let path_str = attr_value(e, b"path").unwrap_or_else(|| name.clone());
+    let groups = attr_value(e, b"groups")
+        .map(|g| {
+            g.split([',', ' '])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Project {
+        name,
+        path: PathBuf::from(path_str),
+        revision: attr_value(e, b"revision"),
+        remote: attr_value(e, b"remote"),
+        groups,
+        copyfiles: Vec::new(),
+        linkfiles: Vec::new(),
     })
 }
 
@@ -218,5 +289,46 @@ mod tests {
 </manifest>"#;
         let result = parse(xml);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_manifest_with_linkfile_and_copyfile() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="origin" fetch="https://example.com" />
+  <default revision="main" remote="origin" />
+  <project path="build" name="build-scripts">
+    <linkfile src="Makefile" dest="Makefile" />
+    <linkfile src="scripts/build.sh" dest="build.sh" />
+    <copyfile src="config.json" dest="config.json" />
+  </project>
+  <project path="lib/core" name="core" />
+</manifest>"#;
+        let m = parse(xml).unwrap();
+        assert_eq!(m.projects.len(), 2);
+
+        let build = &m.projects[0];
+        assert_eq!(build.name, "build-scripts");
+        assert_eq!(build.linkfiles.len(), 2);
+        assert_eq!(build.linkfiles[0], LinkFile { src: "Makefile".into(), dest: "Makefile".into() });
+        assert_eq!(build.linkfiles[1], LinkFile { src: "scripts/build.sh".into(), dest: "build.sh".into() });
+        assert_eq!(build.copyfiles.len(), 1);
+        assert_eq!(build.copyfiles[0], CopyFile { src: "config.json".into(), dest: "config.json".into() });
+
+        let core = &m.projects[1];
+        assert!(core.linkfiles.is_empty());
+        assert!(core.copyfiles.is_empty());
+    }
+
+    #[test]
+    fn parse_manifest_with_self_closing_project_no_children() {
+        let xml = r#"<manifest>
+  <remote name="origin" fetch="https://example.com" />
+  <project path="app" name="app" />
+</manifest>"#;
+        let m = parse(xml).unwrap();
+        assert_eq!(m.projects.len(), 1);
+        assert!(m.projects[0].linkfiles.is_empty());
+        assert!(m.projects[0].copyfiles.is_empty());
     }
 }
