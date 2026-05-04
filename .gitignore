@@ -1,0 +1,19 @@
+# Rust / Cargo
+/target/
+
+# rupo working directory
+.rupo/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cargo timings
+cargo-timing-*.html
+cargo-timing.html

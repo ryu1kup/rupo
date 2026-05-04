@@ -3,6 +3,10 @@
 //! All Git I/O goes through this module so that the rest of the codebase
 //! (cli/, sync/, etc.) never touches `gix` directly.
 //!
+//! The public API is async. Blocking gix calls are wrapped with
+//! `tokio::task::spawn_blocking` internally so callers don't need to
+//! manage the async/blocking boundary.
+//!
 //! Current implementation: gix with the system `ssh` command for SSH transport.
 //! TODO(native-ssh): Once gix's built-in SSH transport is stable, switch to
 //! native SSH by changing the connection setup in this module alone.
@@ -30,7 +34,7 @@ pub struct FetchOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Public async API
 // ---------------------------------------------------------------------------
 
 /// Clone a repository from `url` into `target_path`.
@@ -39,7 +43,33 @@ pub struct FetchOptions {
 /// the system `ssh` command.
 ///
 /// TODO(native-ssh): Migrate to gix native SSH when stable.
-pub fn clone(url: &str, target_path: &Path, opts: &CloneOptions) -> Result<()> {
+pub async fn clone(url: &str, target_path: &Path, opts: &CloneOptions) -> Result<()> {
+    let url = url.to_owned();
+    let target_path = target_path.to_path_buf();
+    let opts = opts.clone();
+
+    tokio::task::spawn_blocking(move || clone_blocking(&url, &target_path, &opts))
+        .await
+        .context("clone task panicked")?
+}
+
+/// Fetch updates for an existing repository at `repo_path`.
+///
+/// TODO(native-ssh): Migrate to gix native SSH when stable.
+pub async fn fetch(repo_path: &Path, opts: &FetchOptions) -> Result<()> {
+    let repo_path = repo_path.to_path_buf();
+    let opts = opts.clone();
+
+    tokio::task::spawn_blocking(move || fetch_blocking(&repo_path, &opts))
+        .await
+        .context("fetch task panicked")?
+}
+
+// ---------------------------------------------------------------------------
+// Blocking implementations (private)
+// ---------------------------------------------------------------------------
+
+fn clone_blocking(url: &str, target_path: &Path, opts: &CloneOptions) -> Result<()> {
     let mut prepare = gix::prepare_clone(url, target_path).context("failed to prepare clone")?;
 
     if let Some(ref branch) = opts.branch {
@@ -55,17 +85,18 @@ pub fn clone(url: &str, target_path: &Path, opts: &CloneOptions) -> Result<()> {
     // TODO(native-ssh): Once gix supports native SSH transport natively,
     // configure the connection here instead of relying on the system ssh command.
 
-    let (_repo, _outcome) = prepare
-        .fetch_only(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
+    let (mut checkout, _outcome) = prepare
+        .fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
         .context("clone fetch failed")?;
+
+    checkout
+        .main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
+        .context("checkout failed")?;
 
     Ok(())
 }
 
-/// Fetch updates for an existing repository at `repo_path`.
-///
-/// TODO(native-ssh): Migrate to gix native SSH when stable.
-pub fn fetch(repo_path: &Path, opts: &FetchOptions) -> Result<()> {
+fn fetch_blocking(repo_path: &Path, opts: &FetchOptions) -> Result<()> {
     let repo = gix::open(repo_path).context("failed to open repository")?;
 
     let remote = repo
@@ -104,7 +135,6 @@ fn shallow_depth(depth: u32) -> gix::remote::fetch::Shallow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn clone_options_default_has_no_depth_or_branch() {
@@ -121,16 +151,16 @@ mod tests {
     }
 
     #[test]
-    fn clone_with_invalid_url_returns_error() {
+    fn clone_blocking_with_invalid_url_returns_error() {
         let target = std::env::temp_dir().join("rupo-test-nonexistent");
-        let result = clone("://not-a-url", &target, &CloneOptions::default());
+        let result = clone_blocking("://not-a-url", &target, &CloneOptions::default());
         assert!(result.is_err());
     }
 
     #[test]
-    fn fetch_with_nonexistent_repo_returns_error() {
+    fn fetch_blocking_with_nonexistent_repo_returns_error() {
         let path = std::env::temp_dir().join("rupo-test-no-such-repo");
-        let result = fetch(&path, &FetchOptions::default());
+        let result = fetch_blocking(&path, &FetchOptions::default());
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -147,5 +177,19 @@ mod tests {
         };
         assert_eq!(opts.depth, Some(1));
         assert_eq!(opts.branch.as_deref(), Some("main"));
+    }
+
+    #[tokio::test]
+    async fn clone_async_with_invalid_url_returns_error() {
+        let target = std::env::temp_dir().join("rupo-test-async-nonexistent");
+        let result = clone("://not-a-url", &target, &CloneOptions::default()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn fetch_async_with_nonexistent_repo_returns_error() {
+        let path = std::env::temp_dir().join("rupo-test-async-no-such-repo");
+        let result = fetch(&path, &FetchOptions::default()).await;
+        assert!(result.is_err());
     }
 }
