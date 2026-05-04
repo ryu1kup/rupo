@@ -41,6 +41,12 @@ pub async fn run(work_dir: &Path, opts: SyncOptions, cli_groups: Option<&str>) -
         );
     }
 
+    // Use depth from config (set at init time)
+    let opts = SyncOptions {
+        depth: config.depth,
+        ..opts
+    };
+
     let result: SyncResult = parallel::run(work_dir, &manifest, &opts).await;
 
     print_result(&result);

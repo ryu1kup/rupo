@@ -30,6 +30,10 @@ enum Commands {
         /// Restrict manifest projects to specified group(s) [default|all|G1,G2,-G3]
         #[arg(short, long)]
         groups: Option<String>,
+
+        /// Shallow clone depth for project syncs
+        #[arg(long)]
+        depth: Option<u32>,
     },
 
     /// Sync all projects in the workspace
@@ -41,10 +45,6 @@ enum Commands {
         /// Only sync the current branch
         #[arg(short, long)]
         current_branch: bool,
-
-        /// Shallow clone depth
-        #[arg(long)]
-        depth: Option<u32>,
 
         /// Override group filter for this sync only [default|all|G1,G2,-G3]
         #[arg(short, long)]
@@ -62,15 +62,22 @@ async fn main() -> anyhow::Result<()> {
             branch,
             manifest,
             groups,
+            depth,
         } => {
             let work_dir = std::env::current_dir()?;
-            rupo::cli::init::run(&url, branch.as_deref(), &manifest, groups.as_deref(), &work_dir)
-                .await?;
+            rupo::cli::init::run(
+                &url,
+                branch.as_deref(),
+                &manifest,
+                groups.as_deref(),
+                depth,
+                &work_dir,
+            )
+            .await?;
         }
         Commands::Sync {
             jobs,
             current_branch,
-            depth,
             groups,
         } => {
             let work_dir = std::env::current_dir()?;
@@ -81,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
                         .unwrap_or(4)
                 }),
                 current_branch,
-                depth,
+                depth: None,
             };
             rupo::cli::sync::run(&work_dir, opts, groups.as_deref()).await?;
         }

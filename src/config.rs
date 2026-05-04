@@ -13,6 +13,8 @@ pub struct Config {
     pub mirror: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub groups: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
 }
 
 impl Config {
@@ -41,6 +43,7 @@ impl Default for Config {
             manifest: "default.xml".to_string(),
             mirror: false,
             groups: None,
+            depth: None,
         }
     }
 }
@@ -59,6 +62,7 @@ mod tests {
             manifest: "custom.xml".to_string(),
             mirror: true,
             groups: Some("default,-vendor".to_string()),
+            depth: Some(1),
         };
 
         config.save(tmp.path()).unwrap();
@@ -69,6 +73,7 @@ mod tests {
         assert_eq!(loaded.manifest, "custom.xml");
         assert!(loaded.mirror);
         assert_eq!(loaded.groups.as_deref(), Some("default,-vendor"));
+        assert_eq!(loaded.depth, Some(1));
     }
 
     #[test]
@@ -80,6 +85,7 @@ mod tests {
             manifest: "default.xml".to_string(),
             mirror: false,
             groups: None,
+            depth: None,
         };
 
         config.save(tmp.path()).unwrap();
@@ -90,6 +96,7 @@ mod tests {
         assert_eq!(loaded.manifest, "default.xml");
         assert!(!loaded.mirror);
         assert!(loaded.groups.is_none());
+        assert!(loaded.depth.is_none());
     }
 
     #[test]

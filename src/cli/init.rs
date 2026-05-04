@@ -25,13 +25,14 @@ pub async fn run(
     branch: Option<&str>,
     manifest: &str,
     groups: Option<&str>,
+    depth: Option<u32>,
     work_dir: &Path,
 ) -> Result<()> {
     let workspace = work_dir.join(".rupo");
 
     if workspace.exists() {
         reinitialize(&workspace, url, branch, manifest).await?;
-        save_config(&workspace, url, branch, manifest, groups)?;
+        save_config(&workspace, url, branch, manifest, groups, depth)?;
         println!("Reinitialized rupo workspace in {}", workspace.display());
     } else {
         fs::create_dir_all(&workspace)
@@ -40,7 +41,7 @@ pub async fn run(
 
         match initialize(&workspace, url, branch, manifest).await {
             Ok(()) => {
-                save_config(&workspace, url, branch, manifest, groups)?;
+                save_config(&workspace, url, branch, manifest, groups, depth)?;
                 println!("Initialized rupo workspace in {}", workspace.display());
             }
             Err(e) => {
@@ -122,6 +123,7 @@ fn save_config(
     branch: Option<&str>,
     manifest: &str,
     groups: Option<&str>,
+    depth: Option<u32>,
 ) -> Result<()> {
     let config = Config {
         url: url.to_string(),
@@ -129,6 +131,7 @@ fn save_config(
         manifest: manifest.to_string(),
         mirror: false,
         groups: groups.map(String::from),
+        depth,
     };
     config.save(workspace).context("failed to save config.toml")
 }
