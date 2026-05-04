@@ -65,6 +65,23 @@ pub async fn fetch(repo_path: &Path, opts: &FetchOptions) -> Result<()> {
         .context("fetch task panicked")?
 }
 
+/// Reset the working tree of a repository to match a remote branch.
+///
+/// After a [`fetch`], call this to update the local HEAD and working tree
+/// to match `origin/<branch>`. Falls back to `@{upstream}` when `branch`
+/// is `None`.
+///
+/// TODO(native-ssh): Replace with gix worktree API when it supports
+/// efficient working tree updates after fetch.
+pub async fn reset_to_remote(repo_path: &Path, branch: Option<&str>) -> Result<()> {
+    let repo_path = repo_path.to_path_buf();
+    let branch = branch.map(String::from);
+
+    tokio::task::spawn_blocking(move || reset_to_remote_blocking(&repo_path, branch.as_deref()))
+        .await
+        .context("reset task panicked")?
+}
+
 // ---------------------------------------------------------------------------
 // Blocking implementations (private)
 // ---------------------------------------------------------------------------
@@ -118,6 +135,27 @@ fn fetch_blocking(repo_path: &Path, opts: &FetchOptions) -> Result<()> {
     let _outcome = fetch_cmd
         .receive(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
         .context("fetch failed")?;
+
+    Ok(())
+}
+
+fn reset_to_remote_blocking(repo_path: &Path, branch: Option<&str>) -> Result<()> {
+    let target = match branch {
+        Some(b) => format!("origin/{b}"),
+        None => "@{upstream}".to_string(),
+    };
+
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["reset", "--hard", &target])
+        .output()
+        .context("failed to run git reset")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git reset --hard {target} failed: {stderr}");
+    }
 
     Ok(())
 }

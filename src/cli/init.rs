@@ -1,49 +1,55 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use tokio::fs;
 
-use crate::git::ops::{self, CloneOptions};
+use crate::git::ops::{self, CloneOptions, FetchOptions};
 use crate::manifest;
 
-const DEFAULT_MANIFEST_FILE: &str = "default.xml";
-
-/// Initialize a rupo workspace from a manifest repository URL.
+/// Initialize (or reinitialize) a rupo workspace from a manifest repository.
 ///
-/// Flow:
-/// 1. Bail if `.rupo/` already exists
-/// 2. Clone manifest repo into `.rupo/manifests/`
-/// 3. Read `default.xml` from the cloned repo
-/// 4. Parse manifest XML
-/// 5. Convert to `rupo.toml` and save in `.rupo/`
-pub async fn run(url: &str, branch: Option<&str>, work_dir: &Path) -> Result<()> {
+/// ## New init (`.rupo/` does not exist)
+/// 1. Clone manifest repo into `.rupo/manifests/`
+/// 2. Read `<manifest>` from the cloned repo
+/// 3. Parse manifest XML → convert to `rupo.toml` → save
+///
+/// ## Reinit (`.rupo/` already exists)
+/// 1. Fetch and update `.rupo/manifests/`
+/// 2. Re-read `<manifest>` from the updated repo
+/// 3. Parse manifest XML → overwrite `rupo.toml`
+pub async fn run(url: &str, branch: Option<&str>, manifest: &str, work_dir: &Path) -> Result<()> {
     let workspace = work_dir.join(".rupo");
 
     if workspace.exists() {
-        bail!("workspace already initialized at {}", workspace.display());
-    }
+        reinitialize(&workspace, branch, manifest).await?;
+        println!("Reinitialized rupo workspace in {}", workspace.display());
+    } else {
+        fs::create_dir_all(&workspace)
+            .await
+            .context("failed to create .rupo directory")?;
 
-    // Create workspace directory
-    fs::create_dir_all(&workspace)
-        .await
-        .context("failed to create .rupo directory")?;
-
-    // Run the rest of init; clean up .rupo/ on failure.
-    match init_workspace(&workspace, url, branch).await {
-        Ok(()) => {
-            println!("Initialized rupo workspace in {}", workspace.display());
-            Ok(())
-        }
-        Err(e) => {
-            // Best-effort cleanup
-            let _ = fs::remove_dir_all(&workspace).await;
-            Err(e)
+        match initialize(&workspace, url, branch, manifest).await {
+            Ok(()) => {
+                println!("Initialized rupo workspace in {}", workspace.display());
+            }
+            Err(e) => {
+                // Best-effort cleanup on first-time init failure
+                let _ = fs::remove_dir_all(&workspace).await;
+                return Err(e);
+            }
         }
     }
+
+    Ok(())
 }
 
-async fn init_workspace(workspace: &Path, url: &str, branch: Option<&str>) -> Result<()> {
-    // Clone manifest repository
+/// Clone manifest repo and generate rupo.toml (first-time init).
+async fn initialize(
+    workspace: &Path,
+    url: &str,
+    branch: Option<&str>,
+    manifest: &str,
+) -> Result<()> {
     let manifests_dir = workspace.join("manifests");
     let clone_opts = CloneOptions {
         branch: branch.map(String::from),
@@ -53,17 +59,36 @@ async fn init_workspace(workspace: &Path, url: &str, branch: Option<&str>) -> Re
         .await
         .context("failed to clone manifest repository")?;
 
-    // Read manifest XML
-    // TODO: support -m option to specify manifest filename
-    let manifest_path = manifests_dir.join(DEFAULT_MANIFEST_FILE);
+    parse_and_save(workspace, manifest, branch).await
+}
+
+/// Fetch updates from remote and regenerate rupo.toml (reinit).
+async fn reinitialize(workspace: &Path, branch: Option<&str>, manifest: &str) -> Result<()> {
+    let manifests_dir = workspace.join("manifests");
+    let fetch_opts = FetchOptions {
+        branch: branch.map(String::from),
+        ..Default::default()
+    };
+    ops::fetch(&manifests_dir, &fetch_opts)
+        .await
+        .context("failed to fetch manifest repository")?;
+
+    ops::reset_to_remote(&manifests_dir, branch)
+        .await
+        .context("failed to update manifest working tree")?;
+
+    parse_and_save(workspace, manifest, branch).await
+}
+
+/// Read manifest XML, parse it, convert to rupo.toml, and save.
+async fn parse_and_save(workspace: &Path, manifest: &str, branch: Option<&str>) -> Result<()> {
+    let manifest_path = workspace.join("manifests").join(manifest);
     let content = fs::read_to_string(&manifest_path)
         .await
         .with_context(|| format!("failed to read {}", manifest_path.display()))?;
 
-    // Parse
     let xml_manifest = manifest::xml::parse(&content).context("failed to parse manifest.xml")?;
 
-    // Convert to rupo.toml and save
     let toml_manifest = manifest::toml::Manifest::from_xml(&xml_manifest, branch);
     let toml_content =
         toml::to_string_pretty(&toml_manifest).context("failed to serialize rupo.toml")?;

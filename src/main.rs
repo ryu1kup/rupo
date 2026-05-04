@@ -21,6 +21,10 @@ enum Commands {
         /// Branch or revision to use
         #[arg(short, long)]
         branch: Option<String>,
+
+        /// Manifest filename within the repository
+        #[arg(short, long, default_value = "default.xml")]
+        manifest: String,
     },
 }
 
@@ -29,9 +33,13 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { url, branch } => {
+        Commands::Init {
+            url,
+            branch,
+            manifest,
+        } => {
             let work_dir = std::env::current_dir()?;
-            rupo::cli::init::run(&url, branch.as_deref(), &work_dir).await?;
+            rupo::cli::init::run(&url, branch.as_deref(), &manifest, &work_dir).await?;
         }
     }
 
