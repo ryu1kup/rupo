@@ -1,7 +1,19 @@
 [package]
 name = "rupo"
 version = "0.0.1"
-edition = "2026"
+edition = "2024"
 license = "Apache-2.0"
+description = "A blazing-fast alternative to Google's repo tool"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+quick-xml = "0.36"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
