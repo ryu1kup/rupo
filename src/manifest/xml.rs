@@ -34,8 +34,17 @@ pub struct Project {
     pub revision: Option<String>,
     pub remote: Option<String>,
     pub groups: Vec<String>,
+    pub size_hint: Option<SizeHint>,
     pub copyfiles: Vec<CopyFile>,
     pub linkfiles: Vec<LinkFile>,
+}
+
+/// Hint for how large a project is, used for sync priority scheduling.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SizeHint {
+    Large,
+    Medium,
+    Small,
 }
 
 /// A `<copyfile src="..." dest="..." />` child of `<project>`.
@@ -173,12 +182,19 @@ fn parse_project_attrs(e: &quick_xml::events::BytesStart<'_>) -> Result<Project>
                 .collect()
         })
         .unwrap_or_default();
+    let size_hint = attr_value(e, b"size-hint").and_then(|s| match s.as_str() {
+        "large" => Some(SizeHint::Large),
+        "medium" => Some(SizeHint::Medium),
+        "small" => Some(SizeHint::Small),
+        _ => None,
+    });
     Ok(Project {
         name,
         path: PathBuf::from(path_str),
         revision: attr_value(e, b"revision"),
         remote: attr_value(e, b"remote"),
         groups,
+        size_hint,
         copyfiles: Vec::new(),
         linkfiles: Vec::new(),
     })

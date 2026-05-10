@@ -7,7 +7,8 @@ use tokio::sync::{Semaphore, watch};
 use tracing::{debug, info, warn};
 
 use crate::git::ops::{self, CloneOptions, FetchOptions};
-use crate::manifest::toml::Manifest;
+use crate::manifest::toml::{Manifest, SizeHint};
+use crate::sync::stats::SyncStats;
 
 /// Options controlling parallel sync behaviour.
 pub struct SyncOptions {
@@ -25,6 +26,8 @@ pub struct SyncResult {
     pub success: Vec<PathBuf>,
     /// `(project_path, error_message)` for each failure.
     pub failure: Vec<(PathBuf, String)>,
+    /// Per-project durations in milliseconds (for stats recording).
+    pub durations: HashMap<String, u64>,
 }
 
 impl Default for SyncOptions {
@@ -56,7 +59,16 @@ fn normalize_path(p: &Path) -> PathBuf {
 /// relationship) are ordered so that the parent is fully cloned before
 /// any child starts, preventing "non-empty directory" errors. If a parent
 /// project fails, its children are also marked as failed.
-pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> SyncResult {
+///
+/// Projects are sorted by estimated duration (largest first) so that slow
+/// projects start early and don't become tail latency. Priority is resolved
+/// as: size-hint (from manifest) > sync-stats (historical) > default.
+pub async fn run(
+    work_dir: &Path,
+    manifest: &Manifest,
+    opts: &SyncOptions,
+    stats: &SyncStats,
+) -> SyncResult {
     let semaphore = Arc::new(Semaphore::new(opts.jobs));
 
     // Resolve the default remote name / revision once.
@@ -115,10 +127,18 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
         done_rxs.insert((*path).clone(), rx);
     }
 
-    // ---- Spawn tasks ----
-    let mut handles = Vec::with_capacity(manifest.projects.len());
+    // ---- Sort projects by estimated duration (largest first) ----
+    let mut sorted_projects: Vec<_> = manifest.projects.iter().collect();
+    sorted_projects.sort_by(|a, b| {
+        let da = estimated_duration(a, stats);
+        let db = estimated_duration(b, stats);
+        db.cmp(&da) // descending
+    });
 
-    for project in &manifest.projects {
+    // ---- Spawn tasks ----
+    let mut handles = Vec::with_capacity(sorted_projects.len());
+
+    for project in &sorted_projects {
         let remote_name = project.remote.as_deref().unwrap_or(&default_remote);
         let fetch_url = remotes.get(remote_name).copied().unwrap_or("");
         let url = format!("{}/{}", fetch_url.trim_end_matches('/'), project.name);
@@ -154,7 +174,7 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
                     if let Some(tx) = done_tx {
                         let _ = tx.send(Some(false));
                     }
-                    return (project_path, Err(err));
+                    return (project_path, Err(err), 0);
                 }
             }
 
@@ -173,16 +193,17 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
             .await;
 
             let elapsed = start.elapsed();
+            let elapsed_ms = elapsed.as_millis() as u64;
 
             match &result {
                 Ok(()) => info!(
                     project = %project_path.display(),
-                    elapsed_ms = elapsed.as_millis() as u64,
+                    elapsed_ms,
                     "sync ok"
                 ),
                 Err(e) => warn!(
                     project = %project_path.display(),
-                    elapsed_ms = elapsed.as_millis() as u64,
+                    elapsed_ms,
                     error = %e,
                     "sync failed"
                 ),
@@ -193,22 +214,47 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
                 let _ = tx.send(Some(result.is_ok()));
             }
 
-            (project_path, result)
+            (project_path, result, elapsed_ms)
         }));
     }
 
     let mut success = Vec::new();
     let mut failure = Vec::new();
+    let mut durations = HashMap::new();
 
     for handle in handles {
         match handle.await {
-            Ok((path, Ok(()))) => success.push(path),
-            Ok((path, Err(e))) => failure.push((path, format!("{e:#}"))),
+            Ok((path, Ok(()), ms)) => {
+                durations.insert(path.to_string_lossy().into_owned(), ms);
+                success.push(path);
+            }
+            Ok((path, Err(e), _)) => failure.push((path, format!("{e:#}"))),
             Err(e) => failure.push((PathBuf::from("unknown"), format!("task panicked: {e}"))),
         }
     }
 
-    SyncResult { success, failure }
+    SyncResult { success, failure, durations }
+}
+
+/// Estimate sync duration for scheduling priority.
+///
+/// Resolution order: size-hint > sync-stats > default (medium).
+fn estimated_duration(
+    project: &crate::manifest::toml::ProjectEntry,
+    stats: &SyncStats,
+) -> u64 {
+    if let Some(ref hint) = project.size_hint {
+        return match hint {
+            SizeHint::Large => 100_000,
+            SizeHint::Medium => 10_000,
+            SizeHint::Small => 1_000,
+        };
+    }
+    let key = project.path.to_string_lossy();
+    if let Some(s) = stats.projects.get(key.as_ref()) {
+        return s.duration_ms;
+    }
+    10_000
 }
 
 /// Clone or fetch a single project.

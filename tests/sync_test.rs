@@ -5,6 +5,7 @@ use tempfile::TempDir;
 
 use rupo::manifest::toml::{Defaults, Manifest, ProjectEntry, RemoteEntry};
 use rupo::sync::parallel::{self, SyncOptions};
+use rupo::sync::stats::SyncStats;
 
 /// Create a bare git repository with a single committed file.
 fn create_bare_repo(parent: &Path, name: &str) -> String {
@@ -61,7 +62,7 @@ async fn sync_with_empty_project_list_succeeds() {
         depth: None,
     };
 
-    let result = parallel::run(tmp.path(), &manifest, &opts).await;
+    let result = parallel::run(tmp.path(), &manifest, &opts, &SyncStats::default()).await;
 
     assert!(result.success.is_empty());
     assert!(result.failure.is_empty());
@@ -97,6 +98,7 @@ async fn sync_result_reports_all_projects() {
                 revision: Some("main".to_string()),
                 remote: None,
                 groups: vec![],
+                size_hint: None,
                 copyfiles: vec![],
                 linkfiles: vec![],
             },
@@ -106,6 +108,7 @@ async fn sync_result_reports_all_projects() {
                 revision: None,
                 remote: None,
                 groups: vec![],
+                size_hint: None,
                 copyfiles: vec![],
                 linkfiles: vec![],
             },
@@ -121,7 +124,7 @@ async fn sync_result_reports_all_projects() {
         depth: None,
     };
 
-    let result = parallel::run(&work_dir, &manifest, &opts).await;
+    let result = parallel::run(&work_dir, &manifest, &opts, &SyncStats::default()).await;
 
     // "core" should succeed
     assert!(

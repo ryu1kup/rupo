@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::group::GroupFilter;
 use crate::manifest::toml as manifest_toml;
 use crate::sync::parallel::{self, SyncOptions, SyncResult};
+use crate::sync::stats::SyncStats;
 
 /// Run `rupo sync`: clone or fetch every project listed in rupo.toml.
 ///
@@ -49,7 +50,16 @@ pub async fn run(work_dir: &Path, opts: SyncOptions, cli_groups: Option<&str>) -
         ..opts
     };
 
-    let result: SyncResult = parallel::run(work_dir, &manifest, &opts).await;
+    // Load historical sync stats for priority scheduling
+    let mut stats = SyncStats::load(&workspace).unwrap_or_default();
+
+    let result: SyncResult = parallel::run(work_dir, &manifest, &opts, &stats).await;
+
+    // Update and save sync stats
+    stats.merge(result.durations.clone());
+    if let Err(e) = stats.save(&workspace) {
+        warn!(error = %e, "failed to save sync stats");
+    }
 
     // Apply linkfiles and copyfiles for successfully synced projects
     apply_file_links(work_dir, &manifest, &result);

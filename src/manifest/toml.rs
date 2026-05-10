@@ -4,6 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::manifest::xml;
 
+/// Hint for how large a project is, used for sync priority scheduling.
+///
+/// Shared between XML manifest and TOML workspace config.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SizeHint {
+    Large,
+    Medium,
+    Small,
+}
+
 /// Native rupo manifest in TOML format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
@@ -37,6 +48,8 @@ pub struct ProjectEntry {
     pub remote: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "size-hint")]
+    pub size_hint: Option<SizeHint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub copyfiles: Vec<FileCopy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -93,6 +106,11 @@ impl Manifest {
                 revision: p.revision.clone(),
                 remote: p.remote.clone(),
                 groups: p.groups.clone(),
+                size_hint: p.size_hint.as_ref().map(|h| match h {
+                    xml::SizeHint::Large => SizeHint::Large,
+                    xml::SizeHint::Medium => SizeHint::Medium,
+                    xml::SizeHint::Small => SizeHint::Small,
+                }),
                 copyfiles: p.copyfiles.iter().map(|c| FileCopy {
                     src: PathBuf::from(&c.src),
                     dest: PathBuf::from(&c.dest),
