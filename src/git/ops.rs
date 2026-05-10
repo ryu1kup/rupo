@@ -144,40 +144,50 @@ fn reset_to_remote_blocking(repo_path: &Path, branch: Option<&str>) -> Result<()
     Ok(())
 }
 
-/// Initialise a non-empty directory as a git repo, then fetch and checkout.
-///
-/// This handles the case where a project's directory already exists (e.g.
-/// because child projects were cloned into sub-directories during a previous
-/// partial sync) but does not yet contain a `.git` directory.
-pub async fn init_and_fetch(url: &str, target_path: &Path, opts: &CloneOptions) -> Result<()> {
+/// Initialize a directory as a git repo and fetch objects, but **do not**
+/// checkout a working tree. Used in two-phase sync where checkout is deferred.
+pub async fn init_and_fetch_only(url: &str, target_path: &Path, opts: &CloneOptions) -> Result<()> {
     let url = url.to_owned();
     let target_path = target_path.to_path_buf();
     let opts = opts.clone();
 
     tokio::task::spawn_blocking(move || {
-        init_and_fetch_blocking(&url, &target_path, opts.branch.as_deref(), opts.depth)
+        init_and_fetch_only_blocking(&url, &target_path, opts.branch.as_deref(), opts.depth)
     })
     .await
-    .context("init_and_fetch task panicked")?
+    .context("init_and_fetch_only task panicked")?
 }
 
-fn init_and_fetch_blocking(
+/// Checkout a branch after a fetch. Creates or resets a local branch
+/// tracking the remote ref.
+pub async fn checkout_branch(repo_path: &Path, branch: Option<&str>) -> Result<()> {
+    let repo_path = repo_path.to_path_buf();
+    let branch = branch.map(String::from);
+
+    tokio::task::spawn_blocking(move || checkout_branch_blocking(&repo_path, branch.as_deref()))
+        .await
+        .context("checkout task panicked")?
+}
+
+fn init_and_fetch_only_blocking(
     url: &str,
     target: &Path,
     branch: Option<&str>,
     depth: Option<u32>,
 ) -> Result<()> {
-    info!(url, path = %target.display(), branch, depth, "init-and-fetch (non-empty dir)");
+    info!(url, path = %target.display(), branch, depth, "init-and-fetch-only");
+
+    std::fs::create_dir_all(target)
+        .with_context(|| format!("failed to create {}", target.display()))?;
+
     run_git(target, &["init"])?;
 
-    // Add remote, or update URL if it already exists.
     if run_git(target, &["remote", "add", "origin", url]).is_err() {
         run_git(target, &["remote", "set-url", "origin", url])?;
     }
 
-    // Fetch.
     let depth_flag;
-    let mut args = vec!["fetch"];
+    let mut args = vec!["fetch", "--no-tags"];
     if let Some(d) = depth {
         depth_flag = format!("--depth={d}");
         args.push(&depth_flag);
@@ -186,17 +196,17 @@ fn init_and_fetch_blocking(
     if let Some(b) = branch {
         args.push(b);
     }
-    run_git(target, &args)?;
+    run_git(target, &args)
+}
 
-    // Checkout: create/reset a local branch tracking the remote.
+fn checkout_branch_blocking(repo_path: &Path, branch: Option<&str>) -> Result<()> {
+    debug!(path = %repo_path.display(), branch, "checking out branch");
     if let Some(b) = branch {
         let remote_ref = format!("origin/{b}");
-        run_git(target, &["checkout", "-B", b, &remote_ref])?;
+        run_git(repo_path, &["checkout", "-B", b, &remote_ref])
     } else {
-        run_git(target, &["checkout", "FETCH_HEAD"])?;
+        run_git(repo_path, &["checkout", "FETCH_HEAD"])
     }
-
-    Ok(())
 }
 
 /// Run a `git` sub-command in `dir` and return an error on non-zero exit.

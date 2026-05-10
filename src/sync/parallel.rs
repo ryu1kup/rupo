@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
 use crate::git::ops::{self, CloneOptions, FetchOptions};
@@ -49,20 +49,15 @@ fn normalize_path(p: &Path) -> PathBuf {
     PathBuf::from(s.trim_end_matches('/'))
 }
 
-/// Sync every project listed in `manifest` under `work_dir`.
+/// Two-phase sync: fetch all projects in parallel, then checkout in
+/// parent→child order.
 ///
-/// Each project is either cloned (if not yet present) or fetched (if already
-/// present). Work is distributed across at most `opts.jobs` concurrent tasks.
-/// A single project failure does **not** abort the remaining projects.
+/// Phase 1 runs all network I/O (git fetch) concurrently with semaphore
+/// limiting. No parent-child ordering is needed because fetch does not
+/// write to the working tree.
 ///
-/// Projects whose paths are prefixes of other projects (parent-child
-/// relationship) are ordered so that the parent is fully cloned before
-/// any child starts, preventing "non-empty directory" errors. If a parent
-/// project fails, its children are also marked as failed.
-///
-/// Projects are sorted by estimated duration (largest first) so that slow
-/// projects start early and don't become tail latency. Priority is resolved
-/// as: size-hint (from manifest) > sync-stats (historical) > default.
+/// Phase 2 runs checkout/reset sequentially in topological order (parents
+/// before children) so that child repos correctly overwrite parent files.
 pub async fn run(
     work_dir: &Path,
     manifest: &Manifest,
@@ -86,16 +81,13 @@ pub async fn run(
         .map(|r| (r.name.as_str(), r.fetch.as_str()))
         .collect();
 
-    // ---- Parent-child dependency tracking ----
-    // Collect all *normalized* project paths (trailing `/` stripped) to
-    // detect nesting correctly.
+    // ---- Parent-child detection ----
     let norm_paths: HashSet<PathBuf> = manifest
         .projects
         .iter()
         .map(|p| normalize_path(&p.path))
         .collect();
 
-    // For each project, find its closest ancestor that is also a project.
     let mut parent_of: HashMap<PathBuf, PathBuf> = HashMap::new();
     for path in &norm_paths {
         let mut best: Option<&Path> = None;
@@ -115,18 +107,6 @@ pub async fn run(
         }
     }
 
-    // Create completion signals for projects that have children.
-    // The channel carries `Option<bool>`: `None` = not done, `Some(true)`
-    // = parent succeeded, `Some(false)` = parent failed.
-    let parent_paths: HashSet<&PathBuf> = parent_of.values().collect();
-    let mut done_txs: HashMap<PathBuf, watch::Sender<Option<bool>>> = HashMap::new();
-    let mut done_rxs: HashMap<PathBuf, watch::Receiver<Option<bool>>> = HashMap::new();
-    for path in &parent_paths {
-        let (tx, rx) = watch::channel(None);
-        done_txs.insert((*path).clone(), tx);
-        done_rxs.insert((*path).clone(), rx);
-    }
-
     // ---- Sort projects by estimated duration (largest first) ----
     let mut sorted_projects: Vec<_> = manifest.projects.iter().collect();
     sorted_projects.sort_by(|a, b| {
@@ -135,101 +115,128 @@ pub async fn run(
         db.cmp(&da) // descending
     });
 
-    // ---- Spawn tasks ----
-    let mut handles = Vec::with_capacity(sorted_projects.len());
+    // ---- Phase 1: Parallel fetch (no parent-child ordering) ----
+    info!("phase 1: fetching {} projects in parallel", sorted_projects.len());
+
+    let mut fetch_handles = Vec::with_capacity(sorted_projects.len());
 
     for project in &sorted_projects {
         let remote_name = project.remote.as_deref().unwrap_or(&default_remote);
         let fetch_url = remotes.get(remote_name).copied().unwrap_or("");
         let url = format!("{}/{}", fetch_url.trim_end_matches('/'), project.name);
-
         let revision = project
             .revision
             .clone()
             .or_else(|| default_revision.clone());
-
         let target_path: PathBuf = work_dir.join(&project.path);
         let project_path = project.path.clone();
-        let norm = normalize_path(&project.path);
         let depth = opts.depth;
-        let current_branch = opts.current_branch;
         let sem = Arc::clone(&semaphore);
 
-        // If this project has a parent project, grab a receiver to wait on.
-        let wait_rx = parent_of
-            .get(&norm)
-            .and_then(|pp| done_rxs.get(pp).cloned());
-
-        // If this project is a parent, grab the sender to signal completion.
-        let done_tx = done_txs.remove(&norm);
-
-        handles.push(tokio::spawn(async move {
-            // Wait for parent project to finish before starting.
-            if let Some(mut rx) = wait_rx {
-                let _ = rx.wait_for(|v| v.is_some()).await;
-                // If parent failed, fail immediately.
-                if *rx.borrow() == Some(false) {
-                    let err = anyhow::anyhow!("skipped: parent project failed");
-                    warn!(project = %project_path.display(), "skipped: parent failed");
-                    if let Some(tx) = done_tx {
-                        let _ = tx.send(Some(false));
-                    }
-                    return (project_path, Err(err), 0);
-                }
-            }
-
+        fetch_handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore should not be closed");
 
-            debug!(project = %project_path.display(), "sync started");
+            debug!(project = %project_path.display(), "fetch started");
             let start = std::time::Instant::now();
 
-            let result = sync_one_project(
-                &url,
-                &target_path,
-                revision.as_deref(),
-                depth,
-                current_branch,
-            )
-            .await;
+            let result = fetch_project(&url, &target_path, revision.as_deref(), depth).await;
 
-            let elapsed = start.elapsed();
-            let elapsed_ms = elapsed.as_millis() as u64;
-
+            let elapsed_ms = start.elapsed().as_millis() as u64;
             match &result {
-                Ok(()) => info!(
+                Ok(existing) => info!(
                     project = %project_path.display(),
                     elapsed_ms,
-                    "sync ok"
+                    existing,
+                    "fetch ok"
                 ),
                 Err(e) => warn!(
                     project = %project_path.display(),
                     elapsed_ms,
                     error = %e,
-                    "sync failed"
+                    "fetch failed"
                 ),
             }
 
-            // Signal children: success or failure.
-            if let Some(tx) = done_tx {
-                let _ = tx.send(Some(result.is_ok()));
-            }
-
-            (project_path, result, elapsed_ms)
+            (project_path, target_path, revision, result, elapsed_ms)
         }));
     }
 
-    let mut success = Vec::new();
-    let mut failure = Vec::new();
-    let mut durations = HashMap::new();
+    // Collect Phase 1 results.
+    struct FetchedProject {
+        project_path: PathBuf,
+        target_path: PathBuf,
+        revision: Option<String>,
+        was_existing: bool,
+    }
 
-    for handle in handles {
+    let mut fetched: Vec<FetchedProject> = Vec::new();
+    let mut failure: Vec<(PathBuf, String)> = Vec::new();
+    let mut durations: HashMap<String, u64> = HashMap::new();
+
+    for handle in fetch_handles {
         match handle.await {
-            Ok((path, Ok(()), ms)) => {
-                durations.insert(path.to_string_lossy().into_owned(), ms);
-                success.push(path);
+            Ok((project_path, target_path, revision, Ok(was_existing), ms)) => {
+                durations.insert(project_path.to_string_lossy().into_owned(), ms);
+                fetched.push(FetchedProject {
+                    project_path,
+                    target_path,
+                    revision,
+                    was_existing,
+                });
             }
-            Ok((path, Err(e), _)) => failure.push((path, format!("{e:#}"))),
-            Err(e) => failure.push((PathBuf::from("unknown"), format!("task panicked: {e}"))),
+            Ok((project_path, _, _, Err(e), _)) => {
+                failure.push((project_path, format!("{e:#}")));
+            }
+            Err(e) => {
+                failure.push((PathBuf::from("unknown"), format!("task panicked: {e}")));
+            }
+        }
+    }
+
+    // ---- Phase 2: Checkout in parent→child order ----
+    info!("phase 2: checking out {} projects", fetched.len());
+
+    // Sort by path depth (parents first).
+    fetched.sort_by_key(|f| f.project_path.components().count());
+
+    let failed_norms: HashSet<PathBuf> = failure
+        .iter()
+        .map(|(p, _)| normalize_path(p))
+        .collect();
+    // Track checkout failures so children of failed checkouts are also skipped.
+    let mut checkout_failed: HashSet<PathBuf> = HashSet::new();
+
+    let mut success: Vec<PathBuf> = Vec::new();
+
+    for proj in &fetched {
+        let norm = normalize_path(&proj.project_path);
+
+        // Skip if parent's fetch or checkout failed.
+        if let Some(parent_norm) = parent_of.get(&norm)
+            && (failed_norms.contains(parent_norm) || checkout_failed.contains(parent_norm))
+        {
+            warn!(project = %proj.project_path.display(), "skipped: parent failed");
+            failure.push((proj.project_path.clone(), "skipped: parent project failed".into()));
+            checkout_failed.insert(norm);
+            continue;
+        }
+
+        let result = if proj.was_existing {
+            ops::reset_to_remote(&proj.target_path, proj.revision.as_deref()).await
+        } else {
+            ops::checkout_branch(&proj.target_path, proj.revision.as_deref()).await
+        };
+
+        match result {
+            Ok(()) => {
+                info!(project = %proj.project_path.display(), "checkout ok");
+                success.push(proj.project_path.clone());
+            }
+            Err(e) => {
+                warn!(project = %proj.project_path.display(), error = %e, "checkout failed");
+                failure.push((proj.project_path.clone(), format!("{e:#}")));
+                checkout_failed.insert(norm);
+            }
         }
     }
 
@@ -257,21 +264,17 @@ fn estimated_duration(
     10_000
 }
 
-/// Clone or fetch a single project.
-async fn sync_one_project(
+/// Phase 1: Fetch a project without checkout.
+/// Returns `Ok(true)` if the repo already existed (warm sync),
+/// `Ok(false)` if freshly initialized (cold sync).
+async fn fetch_project(
     url: &str,
     target_path: &Path,
     revision: Option<&str>,
     depth: Option<u32>,
-    _current_branch: bool,
-) -> Result<()> {
-    let clone_opts = CloneOptions {
-        depth,
-        branch: revision.map(String::from),
-    };
-
+) -> Result<bool> {
     if target_path.join(".git").exists() {
-        // Already cloned – fetch updates.
+        // Warm sync: repo exists, just fetch.
         let fetch_opts = FetchOptions {
             depth,
             branch: revision.map(String::from),
@@ -279,28 +282,16 @@ async fn sync_one_project(
         ops::fetch(target_path, &fetch_opts)
             .await
             .with_context(|| format!("fetch failed for {}", target_path.display()))?;
-
-        ops::reset_to_remote(target_path, revision)
-            .await
-            .with_context(|| format!("reset failed for {}", target_path.display()))?;
-    } else if target_path.exists() {
-        // Directory exists but is not a git repo (e.g. created by a
-        // previously-cloned child project). Initialise in-place.
-        ops::init_and_fetch(url, target_path, &clone_opts)
+        Ok(true)
+    } else {
+        // Cold sync: init + fetch (no checkout).
+        let clone_opts = CloneOptions {
+            depth,
+            branch: revision.map(String::from),
+        };
+        ops::init_and_fetch_only(url, target_path, &clone_opts)
             .await
             .with_context(|| format!("init-and-fetch failed for {}", target_path.display()))?;
-    } else {
-        // Fresh clone.
-        if let Some(parent) = target_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-
-        ops::clone(url, target_path, &clone_opts)
-            .await
-            .with_context(|| format!("clone failed for {}", target_path.display()))?;
+        Ok(false)
     }
-
-    Ok(())
 }
