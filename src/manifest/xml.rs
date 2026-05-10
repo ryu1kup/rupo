@@ -102,12 +102,20 @@ pub fn parse(content: &str) -> Result<Manifest> {
                 b"copyfile" if current_project.is_some() => {
                     let src = require_attr(e, b"src", "copyfile")?;
                     let dest = require_attr(e, b"dest", "copyfile")?;
-                    current_project.as_mut().unwrap().copyfiles.push(CopyFile { src, dest });
+                    current_project
+                        .as_mut()
+                        .unwrap()
+                        .copyfiles
+                        .push(CopyFile { src, dest });
                 }
                 b"linkfile" if current_project.is_some() => {
                     let src = require_attr(e, b"src", "linkfile")?;
                     let dest = require_attr(e, b"dest", "linkfile")?;
-                    current_project.as_mut().unwrap().linkfiles.push(LinkFile { src, dest });
+                    current_project
+                        .as_mut()
+                        .unwrap()
+                        .linkfiles
+                        .push(LinkFile { src, dest });
                 }
                 b"remote" => {
                     let name = require_attr(e, b"name", "remote")?;
@@ -129,12 +137,20 @@ pub fn parse(content: &str) -> Result<Manifest> {
                 b"copyfile" if current_project.is_some() => {
                     let src = require_attr(e, b"src", "copyfile")?;
                     let dest = require_attr(e, b"dest", "copyfile")?;
-                    current_project.as_mut().unwrap().copyfiles.push(CopyFile { src, dest });
+                    current_project
+                        .as_mut()
+                        .unwrap()
+                        .copyfiles
+                        .push(CopyFile { src, dest });
                 }
                 b"linkfile" if current_project.is_some() => {
                     let src = require_attr(e, b"src", "linkfile")?;
                     let dest = require_attr(e, b"dest", "linkfile")?;
-                    current_project.as_mut().unwrap().linkfiles.push(LinkFile { src, dest });
+                    current_project
+                        .as_mut()
+                        .unwrap()
+                        .linkfiles
+                        .push(LinkFile { src, dest });
                 }
                 b"remote" => {
                     let name = require_attr(e, b"name", "remote")?;
@@ -326,10 +342,28 @@ mod tests {
         let build = &m.projects[0];
         assert_eq!(build.name, "build-scripts");
         assert_eq!(build.linkfiles.len(), 2);
-        assert_eq!(build.linkfiles[0], LinkFile { src: "Makefile".into(), dest: "Makefile".into() });
-        assert_eq!(build.linkfiles[1], LinkFile { src: "scripts/build.sh".into(), dest: "build.sh".into() });
+        assert_eq!(
+            build.linkfiles[0],
+            LinkFile {
+                src: "Makefile".into(),
+                dest: "Makefile".into()
+            }
+        );
+        assert_eq!(
+            build.linkfiles[1],
+            LinkFile {
+                src: "scripts/build.sh".into(),
+                dest: "build.sh".into()
+            }
+        );
         assert_eq!(build.copyfiles.len(), 1);
-        assert_eq!(build.copyfiles[0], CopyFile { src: "config.json".into(), dest: "config.json".into() });
+        assert_eq!(
+            build.copyfiles[0],
+            CopyFile {
+                src: "config.json".into(),
+                dest: "config.json".into()
+            }
+        );
 
         let core = &m.projects[1];
         assert!(core.linkfiles.is_empty());

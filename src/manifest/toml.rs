@@ -111,14 +111,22 @@ impl Manifest {
                     xml::SizeHint::Medium => SizeHint::Medium,
                     xml::SizeHint::Small => SizeHint::Small,
                 }),
-                copyfiles: p.copyfiles.iter().map(|c| FileCopy {
-                    src: PathBuf::from(&c.src),
-                    dest: PathBuf::from(&c.dest),
-                }).collect(),
-                linkfiles: p.linkfiles.iter().map(|l| FileLink {
-                    src: PathBuf::from(&l.src),
-                    dest: PathBuf::from(&l.dest),
-                }).collect(),
+                copyfiles: p
+                    .copyfiles
+                    .iter()
+                    .map(|c| FileCopy {
+                        src: PathBuf::from(&c.src),
+                        dest: PathBuf::from(&c.dest),
+                    })
+                    .collect(),
+                linkfiles: p
+                    .linkfiles
+                    .iter()
+                    .map(|l| FileLink {
+                        src: PathBuf::from(&l.src),
+                        dest: PathBuf::from(&l.dest),
+                    })
+                    .collect(),
             })
             .collect();
 

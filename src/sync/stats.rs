@@ -36,8 +36,8 @@ impl SyncStats {
         }
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let stats: Self =
-            toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))?;
+        let stats: Self = toml::from_str(&content)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
         Ok(stats)
     }
 
@@ -45,8 +45,7 @@ impl SyncStats {
     /// so that projects not synced in this run retain their previous stats.
     pub fn save(&self, workspace: &Path) -> Result<()> {
         let path = workspace.join(STATS_FILE);
-        let content =
-            toml::to_string_pretty(self).context("failed to serialize sync stats")?;
+        let content = toml::to_string_pretty(self).context("failed to serialize sync stats")?;
         std::fs::write(&path, content)
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())

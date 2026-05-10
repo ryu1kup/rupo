@@ -52,8 +52,7 @@ impl GroupFilter {
     /// - Every project belongs to `"all"`.
     /// - Every project belongs to `"default"` unless its groups contain `"notdefault"`.
     pub fn matches(&self, project_groups: &[String]) -> bool {
-        let mut effective: HashSet<&str> =
-            project_groups.iter().map(|s| s.as_str()).collect();
+        let mut effective: HashSet<&str> = project_groups.iter().map(|s| s.as_str()).collect();
         effective.insert("all");
         if !effective.contains("notdefault") {
             effective.insert("default");

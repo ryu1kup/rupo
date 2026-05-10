@@ -39,9 +39,7 @@ pub async fn run(work_dir: &Path, opts: SyncOptions, cli_groups: Option<&str>) -
 
     debug!(filter = %group_str, total = before, selected = after, "group filter applied");
     if before != after {
-        println!(
-            "Group filter ({group_str}): syncing {after}/{before} projects"
-        );
+        println!("Group filter ({group_str}): syncing {after}/{before} projects");
     }
 
     // Use depth from config (set at init time)
@@ -71,11 +69,7 @@ pub async fn run(work_dir: &Path, opts: SyncOptions, cli_groups: Option<&str>) -
 /// Create symlinks (linkfile) and copy files (copyfile) declared in the manifest.
 ///
 /// Only applied for projects that synced successfully.
-fn apply_file_links(
-    work_dir: &Path,
-    manifest: &manifest_toml::Manifest,
-    result: &SyncResult,
-) {
+fn apply_file_links(work_dir: &Path, manifest: &manifest_toml::Manifest, result: &SyncResult) {
     for project in &manifest.projects {
         if !result.success.contains(&project.path) {
             continue;
@@ -152,7 +146,9 @@ fn relative_path(base: &Path, target: &Path) -> PathBuf {
     let mut rel = PathBuf::new();
     // Go up from base to common ancestor
     for _ in &base_parts[common..] {
-        if matches!(base_parts[common], Component::Normal(_) | Component::CurDir) || common < base_parts.len() {
+        if matches!(base_parts[common], Component::Normal(_) | Component::CurDir)
+            || common < base_parts.len()
+        {
             rel.push("..");
         }
     }

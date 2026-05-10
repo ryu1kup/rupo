@@ -116,7 +116,10 @@ pub async fn run(
     });
 
     // ---- Phase 1: Parallel fetch (no parent-child ordering) ----
-    info!("phase 1: fetching {} projects in parallel", sorted_projects.len());
+    info!(
+        "phase 1: fetching {} projects in parallel",
+        sorted_projects.len()
+    );
 
     let mut fetch_handles = Vec::with_capacity(sorted_projects.len());
 
@@ -199,10 +202,7 @@ pub async fn run(
     // Sort by path depth (parents first).
     fetched.sort_by_key(|f| f.project_path.components().count());
 
-    let failed_norms: HashSet<PathBuf> = failure
-        .iter()
-        .map(|(p, _)| normalize_path(p))
-        .collect();
+    let failed_norms: HashSet<PathBuf> = failure.iter().map(|(p, _)| normalize_path(p)).collect();
     // Track checkout failures so children of failed checkouts are also skipped.
     let mut checkout_failed: HashSet<PathBuf> = HashSet::new();
 
@@ -216,7 +216,10 @@ pub async fn run(
             && (failed_norms.contains(parent_norm) || checkout_failed.contains(parent_norm))
         {
             warn!(project = %proj.project_path.display(), "skipped: parent failed");
-            failure.push((proj.project_path.clone(), "skipped: parent project failed".into()));
+            failure.push((
+                proj.project_path.clone(),
+                "skipped: parent project failed".into(),
+            ));
             checkout_failed.insert(norm);
             continue;
         }
@@ -240,16 +243,17 @@ pub async fn run(
         }
     }
 
-    SyncResult { success, failure, durations }
+    SyncResult {
+        success,
+        failure,
+        durations,
+    }
 }
 
 /// Estimate sync duration for scheduling priority.
 ///
 /// Resolution order: size-hint > sync-stats > default (medium).
-fn estimated_duration(
-    project: &crate::manifest::toml::ProjectEntry,
-    stats: &SyncStats,
-) -> u64 {
+fn estimated_duration(project: &crate::manifest::toml::ProjectEntry, stats: &SyncStats) -> u64 {
     if let Some(ref hint) = project.size_hint {
         return match hint {
             SizeHint::Large => 100_000,
