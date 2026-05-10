@@ -1,20 +1,17 @@
 //! Git operations abstraction layer.
 //!
 //! All Git I/O goes through this module so that the rest of the codebase
-//! (cli/, sync/, etc.) never touches `gix` directly.
+//! (cli/, sync/, etc.) never touches git directly.
 //!
-//! The public API is async. Blocking gix calls are wrapped with
+//! The public API is async. Blocking git subprocess calls are wrapped with
 //! `tokio::task::spawn_blocking` internally so callers don't need to
 //! manage the async/blocking boundary.
 //!
-//! Current implementation: gix with the system `ssh` command for SSH transport.
-//! TODO(native-ssh): Once gix's built-in SSH transport is stable, switch to
-//! native SSH by changing the connection setup in this module alone.
+//! Implementation: git CLI subprocess.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gix::bstr::BString;
 use tracing::{debug, info, trace};
 
 /// Options for [`clone`].
@@ -40,11 +37,6 @@ pub struct FetchOptions {
 // ---------------------------------------------------------------------------
 
 /// Clone a repository from `url` into `target_path`.
-///
-/// SSH URLs (e.g. `git@github.com:org/repo.git`) are supported through
-/// the system `ssh` command.
-///
-/// TODO(native-ssh): Migrate to gix native SSH when stable.
 pub async fn clone(url: &str, target_path: &Path, opts: &CloneOptions) -> Result<()> {
     let url = url.to_owned();
     let target_path = target_path.to_path_buf();
@@ -56,8 +48,6 @@ pub async fn clone(url: &str, target_path: &Path, opts: &CloneOptions) -> Result
 }
 
 /// Fetch updates for an existing repository at `repo_path`.
-///
-/// TODO(native-ssh): Migrate to gix native SSH when stable.
 pub async fn fetch(repo_path: &Path, opts: &FetchOptions) -> Result<()> {
     let repo_path = repo_path.to_path_buf();
     let opts = opts.clone();
@@ -72,9 +62,6 @@ pub async fn fetch(repo_path: &Path, opts: &FetchOptions) -> Result<()> {
 /// After a [`fetch`], call this to update the local HEAD and working tree
 /// to match `origin/<branch>`. Falls back to `@{upstream}` when `branch`
 /// is `None`.
-///
-/// TODO(native-ssh): Replace with gix worktree API when it supports
-/// efficient working tree updates after fetch.
 pub async fn reset_to_remote(repo_path: &Path, branch: Option<&str>) -> Result<()> {
     let repo_path = repo_path.to_path_buf();
     let branch = branch.map(String::from);
@@ -90,79 +77,49 @@ pub async fn reset_to_remote(repo_path: &Path, branch: Option<&str>) -> Result<(
 
 fn clone_blocking(url: &str, target_path: &Path, opts: &CloneOptions) -> Result<()> {
     info!(url, path = %target_path.display(), depth = opts.depth, branch = opts.branch.as_deref(), "cloning");
-    let mut prepare = gix::prepare_clone(url, target_path).context("failed to prepare clone")?;
 
-    if let Some(ref branch) = opts.branch {
-        prepare = prepare
-            .with_ref_name(Some(branch.as_str()))
-            .context("invalid branch name")?;
-    }
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("clone").arg("--single-branch").arg("--no-tags");
 
     if let Some(d) = opts.depth {
-        prepare = prepare.with_shallow(shallow_depth(d));
+        cmd.arg(format!("--depth={d}"));
     }
 
-    // Restrict fetch to a single branch (like `git clone --single-branch`).
-    // Without this, gix fetches all remote refs, which is extremely slow for
-    // repositories with many branches.
-    let branch_for_closure = opts.branch.clone();
-    prepare = prepare.configure_remote(move |mut remote| {
-        if let Some(ref branch) = branch_for_closure {
-            let refspec = format!(
-                "+refs/heads/{branch}:refs/remotes/origin/{branch}"
-            );
-            debug!(refspec, "restricting fetch to single branch");
-            remote.replace_refspecs(Some(BString::from(refspec)), gix::remote::Direction::Fetch)?;
-        }
-        remote = remote.with_fetch_tags(gix::remote::fetch::Tags::None);
-        Ok(remote)
-    });
+    if let Some(ref b) = opts.branch {
+        cmd.args(["--branch", b]);
+    }
 
-    let (mut checkout, _outcome) = prepare
-        .fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-        .context("clone fetch failed")?;
+    cmd.arg(url).arg(target_path);
 
-    checkout
-        .main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-        .context("checkout failed")?;
+    trace!(cmd = ?cmd, "git clone");
+    let output = cmd.output().context("failed to run git clone")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git clone failed: {}", stderr.trim());
+    }
 
     Ok(())
 }
 
 fn fetch_blocking(repo_path: &Path, opts: &FetchOptions) -> Result<()> {
     info!(path = %repo_path.display(), depth = opts.depth, branch = opts.branch.as_deref(), "fetching");
-    let repo = gix::open(repo_path).context("failed to open repository")?;
 
-    let mut remote = repo
-        .find_remote("origin")
-        .context("remote 'origin' not found")?;
+    let mut args: Vec<&str> = vec!["fetch", "--no-tags"];
 
-    // Restrict fetch to the specified branch to avoid fetching all refs.
-    if let Some(ref branch) = opts.branch {
-        let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-        debug!(refspec, "restricting fetch to single branch");
-        remote
-            .replace_refspecs(Some(BString::from(refspec)), gix::remote::Direction::Fetch)
-            .context("invalid refspec")?;
-    }
-
-    let connection = remote
-        .connect(gix::remote::Direction::Fetch)
-        .context("failed to connect to remote")?;
-
-    let mut fetch_cmd = connection
-        .prepare_fetch(gix::progress::Discard, Default::default())
-        .context("failed to prepare fetch")?;
-
+    let depth_flag;
     if let Some(d) = opts.depth {
-        fetch_cmd = fetch_cmd.with_shallow(shallow_depth(d));
+        depth_flag = format!("--depth={d}");
+        args.push(&depth_flag);
     }
 
-    let _outcome = fetch_cmd
-        .receive(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-        .context("fetch failed")?;
+    args.push("origin");
 
-    Ok(())
+    if let Some(ref b) = opts.branch {
+        args.push(b);
+    }
+
+    run_git(repo_path, &args)
 }
 
 fn reset_to_remote_blocking(repo_path: &Path, branch: Option<&str>) -> Result<()> {
@@ -266,12 +223,6 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn shallow_depth(depth: u32) -> gix::remote::fetch::Shallow {
-    gix::remote::fetch::Shallow::DepthAtRemote(
-        std::num::NonZero::new(depth).expect("depth must be > 0"),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,11 +253,6 @@ mod tests {
         let path = std::env::temp_dir().join("rupo-test-no-such-repo");
         let result = fetch_blocking(&path, &FetchOptions::default());
         assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("failed to open repository"),
-            "unexpected error: {msg}"
-        );
     }
 
     #[test]
