@@ -17,3 +17,9 @@ Thumbs.db
 # Cargo timings
 cargo-timing-*.html
 cargo-timing.html
+
+# Local dev scripts / logs
+bench-*.sh
+Justfile
+log*
+.repo/
