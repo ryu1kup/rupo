@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use tokio::fs;
+use tracing::{debug, info};
 
 use crate::config::Config;
 use crate::git::ops::{self, CloneOptions, FetchOptions};
@@ -29,6 +30,7 @@ pub async fn run(
     work_dir: &Path,
 ) -> Result<()> {
     let workspace = work_dir.join(".rupo");
+    info!(url, branch, manifest, groups, depth, "init starting");
 
     if workspace.exists() {
         reinitialize(&workspace, url, branch, manifest).await?;
@@ -100,6 +102,7 @@ async fn reinitialize(
 /// Read manifest XML, parse it, convert to rupo.toml, and save.
 async fn parse_and_save(workspace: &Path, manifest: &str, branch: Option<&str>) -> Result<()> {
     let manifest_path = workspace.join("manifests").join(manifest);
+    debug!(path = %manifest_path.display(), "parsing manifest XML");
     let content = fs::read_to_string(&manifest_path)
         .await
         .with_context(|| format!("failed to read {}", manifest_path.display()))?;

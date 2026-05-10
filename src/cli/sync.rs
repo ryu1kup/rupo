@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use tracing::{debug, warn};
 
 use crate::config::Config;
 use crate::group::GroupFilter;
@@ -35,6 +36,7 @@ pub async fn run(work_dir: &Path, opts: SyncOptions, cli_groups: Option<&str>) -
     manifest.projects.retain(|p| filter.matches(&p.groups));
     let after = manifest.projects.len();
 
+    debug!(filter = %group_str, total = before, selected = after, "group filter applied");
     if before != after {
         println!(
             "Group filter ({group_str}): syncing {after}/{before} projects"
@@ -74,7 +76,9 @@ fn apply_file_links(
         for lf in &project.linkfiles {
             let src = project_dir.join(&lf.src);
             let dest = work_dir.join(&lf.dest);
+            debug!(src = %src.display(), dest = %dest.display(), "creating linkfile");
             if let Err(e) = create_symlink(&src, &dest) {
+                warn!(dest = %lf.dest.display(), error = %e, "linkfile failed");
                 eprintln!("linkfile {}: {e}", lf.dest.display());
             }
         }
@@ -82,7 +86,9 @@ fn apply_file_links(
         for cf in &project.copyfiles {
             let src = project_dir.join(&cf.src);
             let dest = work_dir.join(&cf.dest);
+            debug!(src = %src.display(), dest = %dest.display(), "copying file");
             if let Err(e) = copy_file(&src, &dest) {
+                warn!(dest = %cf.dest.display(), error = %e, "copyfile failed");
                 eprintln!("copyfile {}: {e}", cf.dest.display());
             }
         }

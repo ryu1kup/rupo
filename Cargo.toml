@@ -13,6 +13,8 @@ quick-xml = "0.36"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 thiserror = "2"
 gix = { version = "0.72", default-features = false, features = ["blocking-network-client", "worktree-mutation"] }
 

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tokio::sync::{Semaphore, watch};
+use tracing::{debug, info, warn};
 
 use crate::git::ops::{self, CloneOptions, FetchOptions};
 use crate::manifest::toml::Manifest;
@@ -149,6 +150,7 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
                 // If parent failed, fail immediately.
                 if *rx.borrow() == Some(false) {
                     let err = anyhow::anyhow!("skipped: parent project failed");
+                    warn!(project = %project_path.display(), "skipped: parent failed");
                     if let Some(tx) = done_tx {
                         let _ = tx.send(Some(false));
                     }
@@ -158,6 +160,9 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
 
             let _permit = sem.acquire().await.expect("semaphore should not be closed");
 
+            debug!(project = %project_path.display(), "sync started");
+            let start = std::time::Instant::now();
+
             let result = sync_one_project(
                 &url,
                 &target_path,
@@ -166,6 +171,22 @@ pub async fn run(work_dir: &Path, manifest: &Manifest, opts: &SyncOptions) -> Sy
                 current_branch,
             )
             .await;
+
+            let elapsed = start.elapsed();
+
+            match &result {
+                Ok(()) => info!(
+                    project = %project_path.display(),
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "sync ok"
+                ),
+                Err(e) => warn!(
+                    project = %project_path.display(),
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    error = %e,
+                    "sync failed"
+                ),
+            }
 
             // Signal children: success or failure.
             if let Some(tx) = done_tx {

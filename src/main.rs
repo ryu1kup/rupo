@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use rupo::sync::parallel::SyncOptions;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(
@@ -7,6 +8,10 @@ use rupo::sync::parallel::SyncOptions;
     about = "A blazing-fast alternative to Google's repo tool"
 )]
 struct Cli {
+    /// Increase verbosity (-v info, -vv debug, -vvv trace)
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    verbose: u8,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -55,6 +60,18 @@ enum Commands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    let filter = match cli.verbose {
+        0 => EnvFilter::new("warn"),
+        1 => EnvFilter::new("rupo=info"),
+        2 => EnvFilter::new("rupo=debug"),
+        _ => EnvFilter::new("rupo=trace"),
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .init();
 
     match cli.command {
         Commands::Init {
